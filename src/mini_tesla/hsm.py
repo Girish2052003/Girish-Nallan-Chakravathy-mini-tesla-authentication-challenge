@@ -23,7 +23,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 KEY_SIZE: Final = 32
 TAG_SIZE: Final = 32
 NONCE_SIZE: Final = 12
-FILE_MAGIC: Final = b"MINITESLA-HSM\\x01"
+FILE_MAGIC: Final = b"MINITESLA-HSM\x01"
 DEFAULT_MASTER_KEY_ENV: Final = "MINITESLA_MASTER_KEY"
 
 
