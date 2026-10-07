@@ -10,7 +10,7 @@ from typing import Final
 from .hsm import HSM, HSMError, InvalidKeyDisclosure, TAG_SIZE
 
 PROTOCOL_VERSION: Final = 1
-WIRE_DOMAIN: Final = b"MINI-TESLA-AUTH\\x00"
+WIRE_DOMAIN: Final = b"MINI-TESLA-AUTH\x00"
 MAX_PAYLOAD_SIZE: Final = 1_048_576
 
 
