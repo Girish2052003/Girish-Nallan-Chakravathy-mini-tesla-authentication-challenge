@@ -111,3 +111,219 @@ We will evaluate your submission based on:
 1. Everything must be pushed to your **GitHub repository**.
 2. Provide a `README.md` explaining the design and how to run the demonstration.
 3. Include automated tests and instructions for running them.
+
+
+---
+
+# Candidate Solution — Girish Nallan Chakravathy
+
+This fork preserves the original challenge statement above and adds a complete Python implementation of the requested simplified TESLA-style authentication flow.
+
+## Implementation summary
+
+The solution uses:
+
+- Python 3.11+
+- SHA-256 for the one-way key chain
+- HMAC-SHA256 for message authentication
+- AES-256-GCM for encrypted HSM state export/import
+- the Python cryptography package for HMAC and AES-GCM
+- pytest for automated tests
+
+The implementation is intentionally small and explicit. The Satellite and Receiver use separate HSM instances. The satellite-side HSM owns the undisclosed authentication keys; the receiver-side HSM starts with only the trusted key-chain commitment and learns interval keys only through validated disclosure.
+
+
+## Requirement coverage at a glance
+
+| Challenge requirement | Where to verify it |
+| --- | --- |
+| CSPRNG key generation | `HSM.create_satellite()` uses `secrets.token_bytes()` |
+| SHA-256 one-way key chain | `HSM.create_satellite()` and `validate_and_store_disclosed_key()` |
+| HMAC-SHA256 generation/verification | `HSM.generate_mac()` and `HSM.verify_mac()` |
+| Keys hidden until explicit disclosure | `HSM.disclose_key()` enforces the disclosure interval |
+| Separate Satellite and Receiver HSMs | `Satellite` and `Receiver` in `protocol.py` |
+| Deterministic MAC input | `AuthPacket.authenticated_bytes()` |
+| Buffer before disclosure, authenticate after | `Receiver.receive()` and `Receiver.process_disclosure()` |
+| Replay, tamper, invalid-key handling | `Receiver` logic plus `tests/test_protocol.py` |
+| AES-256-GCM local export/import | `HSM.export_encrypted()` and `HSM.import_encrypted()` |
+| Master key from environment | persistence methods read `MINITESLA_MASTER_KEY` directly |
+| Required demonstration | `demo.py` |
+| Automated testing | 25 pytest cases plus GitHub Actions |
+
+This table is also the quickest review path: each requirement maps directly to a small method or test rather than to a large framework.
+
+## Project layout
+
+- src/mini_tesla/hsm.py — key-chain generation, HMAC operations, delayed key disclosure, disclosed-key validation, AES-256-GCM persistence
+- src/mini_tesla/protocol.py — deterministic packet encoding, Satellite and Receiver state machines, buffering, disclosure timing checks, replay protection
+- demo.py — required end-to-end demonstration
+- tests/test_protocol.py — automated positive, negative, timing, tampering, replay, persistence, and ordering tests
+- SECURITY.md — threat model, trust assumptions, timing rule, persistence design, and scope limits
+- VERIFICATION.md — security invariants, proof obligations, trusted computing base, and verification evidence
+- verification/check_invariants.py — bounded exhaustive exploration of timing, disclosure, replay, and post-disclosure forgery states
+- .github/workflows/tests.yml — CI test matrix for Python 3.11, 3.12, and 3.13
+
+## Key-chain model
+
+A chain is generated backwards from a cryptographically random terminal value:
+
+    K[i-1] = SHA256(K[i])
+
+K[0] is the trusted public commitment. Message interval i uses K[i].
+
+The Receiver validates a disclosed K[i] by hashing it i times and comparing the result with K[0]. The comparison is constant-time.
+
+## Delayed disclosure safety rule
+
+The Receiver does not authenticate a message immediately. It first checks that the message arrived before the key could have been disclosed:
+
+    receiver_interval < packet_interval + disclosure_delay
+
+Only packets satisfying that condition are buffered. Once the interval key is legitimately disclosed and validated against the commitment, the Receiver verifies the buffered HMAC-SHA256 tag.
+
+This timing check is important: accepting a newly arriving packet after its key could already be public would allow an attacker who knows the disclosed key to forge a valid MAC.
+
+## Deterministic authenticated representation
+
+The MAC covers a domain separator plus fixed-width network-byte-order fields for:
+
+- protocol version
+- interval
+- sequence number
+- disclosure delay
+- payload length
+- payload bytes
+
+This avoids ambiguous concatenation and ensures security-relevant protocol metadata is authenticated along with the message.
+
+## Replay protection
+
+Each logical message is identified by the pair (interval, sequence).
+
+The Receiver rejects:
+
+- a duplicate identity that is already buffered
+- a message identity that was already authenticated and accepted
+- packets arriving after their key-disclosure point
+- packets for intervals whose keys are already disclosed
+
+## HSM persistence
+
+The HSM can export and import its key store without an external database.
+
+State is encrypted and authenticated with AES-256-GCM using:
+
+- a fresh 96-bit nonce for every export
+- authenticated file-format/version bytes as associated data
+- a 32-byte master key supplied through the MINITESLA_MASTER_KEY environment variable
+
+The master key is expected as base64-encoded 32-byte material and is never written into the repository or state file.
+
+Generate a development key with:
+
+```bash
+python -c "import base64,secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+```
+
+Then set it, for example on Linux/macOS:
+
+```bash
+export MINITESLA_MASTER_KEY='<generated value>'
+```
+
+The persistence API reads this variable internally; the master key is not passed as an ordinary function argument:
+
+```python
+hsm.export_encrypted("hsm.enc")
+restored_hsm = HSM.import_encrypted("hsm.enc")
+```
+
+## Setup
+
+Create a virtual environment:
+
+```bash
+python -m venv .venv
+```
+
+Activate it.
+
+Linux/macOS:
+
+```bash
+source .venv/bin/activate
+```
+
+Windows PowerShell:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+Install the project and development dependencies:
+
+```bash
+python -m pip install -e '.[dev]'
+```
+
+Alternatively:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+When using requirements.txt rather than editable installation, run commands with the repository src directory on PYTHONPATH or install the package before running the demo.
+
+## Run the demonstration
+
+```bash
+python demo.py
+```
+
+The demo covers all required challenge cases:
+
+1. a valid message accepted after disclosure
+2. a modified message rejected
+3. an invalid disclosed key rejected
+4. a previously accepted message replay rejected
+5. multiple message/disclosure intervals processed
+6. a modified authentication tag rejected
+
+## Run the tests
+
+```bash
+pytest
+```
+
+The automated suite additionally checks:
+
+- early-disclosure rejection
+- late packet rejection using the TESLA safety condition
+- future-interval packet rejection
+- out-of-order packet buffering before disclosure
+- deterministic authenticated encoding
+- AES-256-GCM HSM export/import
+- wrong-master-key rejection
+- environment-only master-key enforcement
+- malformed packet and malformed tag rejection
+- encrypted-keystore tampering rejection
+- unsupported protocol versions
+- oversized payload and exhausted-key-chain boundaries
+- HSM role separation
+- post-disclosure forgery even when the attacker computes a valid HMAC
+
+## Bounded protocol verification
+
+Alongside the unit/adversarial suite, the repository includes an executable invariant checker over the real implementation:
+
+```bash
+python verification/check_invariants.py
+```
+
+It systematically explores small interval/disclosure state spaces and checks the core TESLA safety condition, key-disclosure timing, commitment linkage, replay rejection, and rejection of a **cryptographically valid HMAC forged after the key has already been disclosed**.
+
+The exact invariants and the limits of this verification claim are documented in `VERIFICATION.md`. This is bounded implementation-level verification, not a claim to have formally proved SHA-256, HMAC, AES-GCM, Python, or the underlying crypto library.
+
+## Notes on scope
+
+This implementation follows the challenge requirement for a simplified TESLA-based protocol. Logical intervals model time; it does not implement clock synchronization, a network transport, a physical HSM, complete TESLA, or Galileo OSNMA. Those boundaries are documented in SECURITY.md.
