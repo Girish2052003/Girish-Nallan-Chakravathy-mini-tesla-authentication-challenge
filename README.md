@@ -132,6 +132,26 @@ The solution uses:
 
 The implementation is intentionally small and explicit. The Satellite and Receiver use separate HSM instances. The satellite-side HSM owns the undisclosed authentication keys; the receiver-side HSM starts with only the trusted key-chain commitment and learns interval keys only through validated disclosure.
 
+
+## Requirement coverage at a glance
+
+| Challenge requirement | Where to verify it |
+| --- | --- |
+| CSPRNG key generation | `HSM.create_satellite()` uses `secrets.token_bytes()` |
+| SHA-256 one-way key chain | `HSM.create_satellite()` and `validate_and_store_disclosed_key()` |
+| HMAC-SHA256 generation/verification | `HSM.generate_mac()` and `HSM.verify_mac()` |
+| Keys hidden until explicit disclosure | `HSM.disclose_key()` enforces the disclosure interval |
+| Separate Satellite and Receiver HSMs | `Satellite` and `Receiver` in `protocol.py` |
+| Deterministic MAC input | `AuthPacket.authenticated_bytes()` |
+| Buffer before disclosure, authenticate after | `Receiver.receive()` and `Receiver.process_disclosure()` |
+| Replay, tamper, invalid-key handling | `Receiver` logic plus `tests/test_protocol.py` |
+| AES-256-GCM local export/import | `HSM.export_encrypted()` and `HSM.import_encrypted()` |
+| Master key from environment | persistence methods read `MINITESLA_MASTER_KEY` directly |
+| Required demonstration | `demo.py` |
+| Automated testing | 19 pytest cases plus GitHub Actions |
+
+This table is also the quickest review path: each requirement maps directly to a small method or test rather than to a large framework.
+
 ## Project layout
 
 - src/mini_tesla/hsm.py — key-chain generation, HMAC operations, delayed key disclosure, disclosed-key validation, AES-256-GCM persistence
@@ -209,6 +229,13 @@ Then set it, for example on Linux/macOS:
 export MINITESLA_MASTER_KEY='<generated value>'
 ```
 
+The persistence API reads this variable internally; the master key is not passed as an ordinary function argument:
+
+```python
+hsm.export_encrypted("hsm.enc")
+restored_hsm = HSM.import_encrypted("hsm.enc")
+```
+
 ## Setup
 
 Create a virtual environment:
@@ -275,7 +302,8 @@ The automated suite additionally checks:
 - deterministic authenticated encoding
 - AES-256-GCM HSM export/import
 - wrong-master-key rejection
-- environment-based master-key loading
+- environment-only master-key enforcement
+- malformed packet and malformed tag rejection
 
 ## Notes on scope
 
