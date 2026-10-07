@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import struct
 from dataclasses import dataclass
 from typing import Final
@@ -59,11 +58,6 @@ class AuthPacket:
     @property
     def identity(self) -> tuple[int, int]:
         return (self.interval, self.sequence)
-
-    @property
-    def wire_fingerprint(self) -> bytes:
-        return hashlib.sha256(self.authenticated_bytes() + self.tag).digest()
-
 
 @dataclass(frozen=True, slots=True)
 class VerificationResult:
