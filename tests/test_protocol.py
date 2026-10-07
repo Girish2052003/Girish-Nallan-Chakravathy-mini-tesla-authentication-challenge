@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import secrets
 from dataclasses import replace
 
@@ -9,7 +11,9 @@ import pytest
 from mini_tesla import (
     DisclosureRejected,
     EarlyDisclosureError,
+    AuthPacket,
     HSM,
+    HSMError,
     PacketRejected,
     PersistenceError,
     Receiver,
@@ -210,3 +214,75 @@ def test_master_key_rejects_bad_environment_value(monkeypatch):
     monkeypatch.setenv("MINITESLA_MASTER_KEY", "not-base64!")
     with pytest.raises(PersistenceError):
         master_key_from_env()
+
+
+def test_tampered_encrypted_hsm_file_is_rejected(tmp_path, monkeypatch):
+    hsm = HSM.create_satellite(3)
+    master_key = secrets.token_bytes(32)
+    monkeypatch.setenv("MINITESLA_MASTER_KEY", base64.b64encode(master_key).decode("ascii"))
+    path = tmp_path / "hsm.enc"
+    hsm.export_encrypted(path)
+
+    blob = bytearray(path.read_bytes())
+    blob[-1] ^= 0x01
+    path.write_bytes(bytes(blob))
+
+    with pytest.raises(PersistenceError):
+        HSM.import_encrypted(path)
+
+
+def test_receiver_rejects_unsupported_protocol_version():
+    satellite, receiver = pair()
+    packet = satellite.authenticate(b"payload")
+    with pytest.raises(PacketRejected):
+        receiver.receive(replace(packet, version=99))
+
+
+def test_satellite_rejects_oversized_payload():
+    satellite, _ = pair()
+    with pytest.raises(ValueError):
+        satellite.authenticate(b"x" * (1_048_576 + 1))
+
+
+def test_satellite_rejects_authentication_after_key_chain_exhaustion():
+    satellite, _ = pair(chain_length=1)
+    satellite.authenticate(b"last valid interval")
+    satellite.advance()
+    with pytest.raises(Exception, match="key chain is exhausted"):
+        satellite.authenticate(b"too late")
+
+
+def test_hsm_roles_enforce_crypto_operation_separation():
+    satellite, receiver = pair()
+    with pytest.raises(HSMError):
+        receiver.hsm.generate_mac(1, b"data")
+    with pytest.raises(HSMError):
+        satellite.hsm.verify_mac(1, b"data", b"0" * 32)
+
+
+def test_valid_hmac_forged_after_disclosure_is_rejected_before_verification():
+    satellite, receiver = pair()
+    original = satellite.authenticate(b"original")
+    receiver.receive(original)
+
+    satellite.advance()
+    receiver.advance()
+    disclosed_key = satellite.disclose(1)
+    assert receiver.process_disclosure(1, disclosed_key)[0].accepted
+
+    forged = AuthPacket(
+        interval=1,
+        sequence=999,
+        disclosure_delay=1,
+        payload=b"attacker-controlled",
+        tag=b"",
+    )
+    valid_forged_tag = hmac.new(
+        disclosed_key,
+        forged.authenticated_bytes(),
+        hashlib.sha256,
+    ).digest()
+    forged = replace(forged, tag=valid_forged_tag)
+
+    with pytest.raises(PacketRejected):
+        receiver.receive(forged)
