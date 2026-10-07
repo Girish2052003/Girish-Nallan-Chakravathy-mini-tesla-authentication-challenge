@@ -148,7 +148,7 @@ The implementation is intentionally small and explicit. The Satellite and Receiv
 | AES-256-GCM local export/import | `HSM.export_encrypted()` and `HSM.import_encrypted()` |
 | Master key from environment | persistence methods read `MINITESLA_MASTER_KEY` directly |
 | Required demonstration | `demo.py` |
-| Automated testing | 19 pytest cases plus GitHub Actions |
+| Automated testing | 25 pytest cases plus GitHub Actions |
 
 This table is also the quickest review path: each requirement maps directly to a small method or test rather than to a large framework.
 
@@ -158,7 +158,9 @@ This table is also the quickest review path: each requirement maps directly to a
 - src/mini_tesla/protocol.py — deterministic packet encoding, Satellite and Receiver state machines, buffering, disclosure timing checks, replay protection
 - demo.py — required end-to-end demonstration
 - tests/test_protocol.py — automated positive, negative, timing, tampering, replay, persistence, and ordering tests
-- SECURITY.md — security assumptions, trust model, timing rule, persistence design, and deliberate scope limits
+- SECURITY.md — threat model, trust assumptions, timing rule, persistence design, and scope limits
+- VERIFICATION.md — security invariants, proof obligations, trusted computing base, and verification evidence
+- verification/check_invariants.py — bounded exhaustive exploration of timing, disclosure, replay, and post-disclosure forgery states
 - .github/workflows/tests.yml — CI test matrix for Python 3.11, 3.12, and 3.13
 
 ## Key-chain model
@@ -304,6 +306,23 @@ The automated suite additionally checks:
 - wrong-master-key rejection
 - environment-only master-key enforcement
 - malformed packet and malformed tag rejection
+- encrypted-keystore tampering rejection
+- unsupported protocol versions
+- oversized payload and exhausted-key-chain boundaries
+- HSM role separation
+- post-disclosure forgery even when the attacker computes a valid HMAC
+
+## Bounded protocol verification
+
+Alongside the unit/adversarial suite, the repository includes an executable invariant checker over the real implementation:
+
+```bash
+python verification/check_invariants.py
+```
+
+It systematically explores small interval/disclosure state spaces and checks the core TESLA safety condition, key-disclosure timing, commitment linkage, replay rejection, and rejection of a **cryptographically valid HMAC forged after the key has already been disclosed**.
+
+The exact invariants and the limits of this verification claim are documented in `VERIFICATION.md`. This is bounded implementation-level verification, not a claim to have formally proved SHA-256, HMAC, AES-GCM, Python, or the underlying crypto library.
 
 ## Notes on scope
 
