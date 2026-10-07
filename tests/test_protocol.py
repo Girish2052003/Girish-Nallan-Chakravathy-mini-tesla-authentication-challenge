@@ -141,6 +141,20 @@ def test_receiver_rejects_future_interval_packet():
         receiver.receive(future)
 
 
+
+def test_malformed_tag_length_is_rejected_before_buffering():
+    satellite, receiver = pair()
+    packet = satellite.authenticate(b"payload")
+    with pytest.raises(PacketRejected):
+        receiver.receive(replace(packet, tag=b"short"))
+
+
+def test_non_packet_input_is_rejected():
+    _, receiver = pair()
+    with pytest.raises(PacketRejected):
+        receiver.receive(b"not-a-packet")  # type: ignore[arg-type]
+
+
 def test_authenticated_representation_covers_protocol_metadata():
     satellite, _ = pair()
     packet = satellite.authenticate(b"payload")
@@ -149,27 +163,41 @@ def test_authenticated_representation_covers_protocol_metadata():
     assert packet.authenticated_bytes() != replace(packet, payload=b"other").authenticated_bytes()
 
 
-def test_encrypted_hsm_export_import_round_trip(tmp_path):
+def test_encrypted_hsm_export_import_round_trip(tmp_path, monkeypatch):
     hsm = HSM.create_satellite(4)
     master_key = secrets.token_bytes(32)
+    monkeypatch.setenv("MINITESLA_MASTER_KEY", base64.b64encode(master_key).decode("ascii"))
     path = tmp_path / "hsm.enc"
 
-    hsm.export_encrypted(path, master_key)
+    hsm.export_encrypted(path)
     raw = path.read_bytes()
     assert hsm.commitment not in raw
 
-    restored = HSM.import_encrypted(path, master_key)
+    restored = HSM.import_encrypted(path)
     assert restored.commitment == hsm.commitment
     assert restored.chain_length == hsm.chain_length
     assert restored.generate_mac(1, b"abc") == hsm.generate_mac(1, b"abc")
 
 
-def test_encrypted_hsm_import_rejects_wrong_master_key(tmp_path):
+def test_encrypted_hsm_import_rejects_wrong_master_key(tmp_path, monkeypatch):
     hsm = HSM.create_satellite(3)
     path = tmp_path / "hsm.enc"
-    hsm.export_encrypted(path, secrets.token_bytes(32))
+
+    first_key = secrets.token_bytes(32)
+    monkeypatch.setenv("MINITESLA_MASTER_KEY", base64.b64encode(first_key).decode("ascii"))
+    hsm.export_encrypted(path)
+
+    wrong_key = secrets.token_bytes(32)
+    monkeypatch.setenv("MINITESLA_MASTER_KEY", base64.b64encode(wrong_key).decode("ascii"))
     with pytest.raises(PersistenceError):
-        HSM.import_encrypted(path, secrets.token_bytes(32))
+        HSM.import_encrypted(path)
+
+
+def test_hsm_persistence_requires_master_key_environment_variable(tmp_path, monkeypatch):
+    monkeypatch.delenv("MINITESLA_MASTER_KEY", raising=False)
+    hsm = HSM.create_satellite(2)
+    with pytest.raises(PersistenceError):
+        hsm.export_encrypted(tmp_path / "hsm.enc")
 
 
 def test_master_key_is_loaded_from_environment(monkeypatch):
