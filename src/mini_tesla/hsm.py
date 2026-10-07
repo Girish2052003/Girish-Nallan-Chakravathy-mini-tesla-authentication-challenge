@@ -212,11 +212,10 @@ class HSM:
         except InvalidSignature:
             return False
 
-    def export_encrypted(self, path: str | os.PathLike[str], master_key: bytes) -> None:
-        """Persist the HSM key store encrypted with AES-256-GCM."""
+    def export_encrypted(self, path: str | os.PathLike[str]) -> None:
+        """Persist the HSM key store using the environment-provided AES-256 key."""
 
-        if not isinstance(master_key, bytes) or len(master_key) != KEY_SIZE:
-            raise PersistenceError("master key must be exactly 32 bytes for AES-256-GCM")
+        master_key = master_key_from_env()
 
         state = {
             "version": 1,
@@ -233,11 +232,10 @@ class HSM:
         Path(path).write_bytes(FILE_MAGIC + nonce + ciphertext)
 
     @classmethod
-    def import_encrypted(cls, path: str | os.PathLike[str], master_key: bytes) -> "HSM":
-        """Restore and authenticate an AES-256-GCM encrypted HSM key store."""
+    def import_encrypted(cls, path: str | os.PathLike[str]) -> "HSM":
+        """Restore HSM state using the master key supplied through the environment."""
 
-        if not isinstance(master_key, bytes) or len(master_key) != KEY_SIZE:
-            raise PersistenceError("master key must be exactly 32 bytes for AES-256-GCM")
+        master_key = master_key_from_env()
 
         try:
             blob = Path(path).read_bytes()
