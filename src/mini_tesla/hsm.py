@@ -229,7 +229,13 @@ class HSM:
         nonce = secrets.token_bytes(NONCE_SIZE)
         ciphertext = AESGCM(master_key).encrypt(nonce, plaintext, FILE_MAGIC)
 
-        Path(path).write_bytes(FILE_MAGIC + nonce + ciphertext)
+        output_path = Path(path)
+        try:
+            output_path.write_bytes(FILE_MAGIC + nonce + ciphertext)
+            # Best-effort restrictive permissions on POSIX-like systems.
+            os.chmod(output_path, 0o600)
+        except OSError as exc:
+            raise PersistenceError("unable to write encrypted HSM state") from exc
 
     @classmethod
     def import_encrypted(cls, path: str | os.PathLike[str]) -> "HSM":
