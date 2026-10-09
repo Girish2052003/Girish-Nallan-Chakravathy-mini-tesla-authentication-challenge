@@ -126,7 +126,7 @@ The implementation runs **locally** with Python **3.11, 3.12, or 3.13** (the ver
 
 ### Linux / macOS (bash or zsh)
 
-\`\`\`bash
+```bash
 git clone https://github.com/Girish2052003/Girish-Nallan-Chakravathy-mini-tesla-authentication-challenge.git
 cd Girish-Nallan-Chakravathy-mini-tesla-authentication-challenge
 python3 -m venv .venv
@@ -136,11 +136,11 @@ python -m pip install -e '.[dev]'
 python demo.py
 python -m pytest -q
 python verification/check_invariants.py
-\`\`\`
+```
 
 ### Windows (PowerShell)
 
-\`\`\`powershell
+```powershell
 git clone https://github.com/Girish2052003/Girish-Nallan-Chakravathy-mini-tesla-authentication-challenge.git
 cd Girish-Nallan-Chakravathy-mini-tesla-authentication-challenge
 py -3.11 -m venv .venv
@@ -149,21 +149,21 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe demo.py
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe verification/check_invariants.py
-\`\`\`
+```
 
-If you installed Python 3.12 or 3.13 instead, substitute \`-3.12\` or \`-3.13\` in the Windows environment-creation command. PowerShell commands use the virtual environment's Python directly, so activating PowerShell scripts is unnecessary.
+If you installed Python 3.12 or 3.13 instead, substitute `-3.12` or `-3.13` in the Windows environment-creation command. PowerShell commands use the virtual environment's Python directly, so activating PowerShell scripts is unnecessary.
 
 ### What to expect
 
 | Command | What it demonstrates | Successful result |
 | --- | --- | --- |
-| \`python demo.py\` | Satellite → Receiver delayed disclosure, valid messages, tampering, bad keys, replay and multiple intervals | Valid packets show \`ACCEPT\`; deliberately invalid cases show \`REJECT\` |
-| \`python -m pytest -q\` | Automated functional and adversarial regression tests | Pytest finishes with all tests passing (exit code 0) |
-| \`python verification/check_invariants.py\` | Finite timing-input grids and fixed replay/forgery traces against the Python implementation | Prints \`Finite implementation checks passed\` (exit code 0) |
+| `python demo.py` | Satellite → Receiver delayed disclosure, valid messages, tampering, bad keys, replay and multiple intervals | Valid packets show `ACCEPT`; deliberately invalid cases show `REJECT` |
+| `python -m pytest -q` | Automated functional and adversarial regression tests | Pytest finishes with all tests passing (exit code 0) |
+| `python verification/check_invariants.py` | Finite timing-input grids and fixed replay/forgery traces against the Python implementation | Prints `Finite implementation checks passed` (exit code 0) |
 
 **Additional model-checking evidence:** An independent finite TLA+ model, including expected attack counterexamples, is explained in [VERIFICATION.md](VERIFICATION.md) and [the model-specific run guide](verification/model/README.md). The GitHub Actions [test workflow](.github/workflows/tests.yml) runs the Python tests, finite checks, and pinned TLA+ model automatically.
 
-**Secrets:** The demo and regression tests do not need you to set a permanent master key manually. For your **own encrypted HSM export/import** experiment, set the \`MINITESLA_MASTER_KEY\` environment variable as described in [HSM persistence](#hsm-persistence). Never commit a real master key or encrypted state file.
+**Secrets:** The demo and regression tests do not need you to set a permanent master key manually. For your **own encrypted HSM export/import** experiment, set the `MINITESLA_MASTER_KEY` environment variable as described in [HSM persistence](#hsm-persistence). Never commit a real master key or encrypted state file.
 
 For the reproducible **hash-locked dependency installation used by CI**, see [Audit hardening and operational assumptions](#audit-hardening-and-operational-assumptions).
 
@@ -231,7 +231,7 @@ The Receiver does not authenticate a message immediately. It checks that the cla
     packet_interval <= receiver_interval
     receiver_interval + max_sender_ahead < packet_interval + disclosure_delay
 
-Here \`max_sender_ahead\` (B) is a *trusted upper bound* on how far ahead the sender can be relative to the receiver. The default B=0 assumes synchronized logical intervals; the simulator does **not** establish clock synchronization itself. Only packets satisfying the checks are buffered. After the key has been disclosed and validated against the commitment, the Receiver verifies the buffered HMAC-SHA256 tag.
+Here `max_sender_ahead` (B) is a *trusted upper bound* on how far ahead the sender can be relative to the receiver. The default B=0 assumes synchronized logical intervals; the simulator does **not** establish clock synchronization itself. Only packets satisfying the checks are buffered. After the key has been disclosed and validated against the commitment, the Receiver verifies the buffered HMAC-SHA256 tag.
 
 This timing check is essential: after an interval key becomes public, an attacker can compute a valid HMAC for a forged old-interval packet, so late arrivals must be rejected. The assumptions and availability trade-offs are detailed in [SECURITY.md](SECURITY.md).
 
@@ -257,7 +257,7 @@ The Receiver rejects:
 - an **exact duplicate candidate** that is already buffered
 - new packets arriving at or after their key-disclosure boundary
 - packets for intervals already closed by validated disclosure
-- any second valid candidate with the same \`(interval, sequence)\` during disclosure processing
+- any second valid candidate with the same `(interval, sequence)` during disclosure processing
 
 To resist an attacker pre-claiming a sequence number with one bogus MAC, the Receiver can buffer a **small bounded number of distinct candidates** for the same identity and authenticates at most one. The buffer and candidate limits are documented in [SECURITY.md](SECURITY.md); this is not a guarantee of availability under flooding.
 
