@@ -119,6 +119,57 @@ We will evaluate your submission based on:
 
 This fork preserves the original challenge statement above and adds a complete Python implementation of the requested simplified TESLA-style authentication flow.
 
+
+## Quick start — run and verify the solution
+
+The implementation runs **locally** with Python **3.11, 3.12, or 3.13** (the versions exercised by CI). You need Git and Python; no server, network service, or database is required. Run the commands below from a terminal.
+
+### Linux / macOS (bash or zsh)
+
+\`\`\`bash
+git clone https://github.com/Girish2052003/Girish-Nallan-Chakravathy-mini-tesla-authentication-challenge.git
+cd Girish-Nallan-Chakravathy-mini-tesla-authentication-challenge
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+
+python demo.py
+python -m pytest -q
+python verification/check_invariants.py
+\`\`\`
+
+### Windows (PowerShell)
+
+\`\`\`powershell
+git clone https://github.com/Girish2052003/Girish-Nallan-Chakravathy-mini-tesla-authentication-challenge.git
+cd Girish-Nallan-Chakravathy-mini-tesla-authentication-challenge
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+
+.\.venv\Scripts\python.exe demo.py
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe verification/check_invariants.py
+\`\`\`
+
+If you installed Python 3.12 or 3.13 instead, substitute \`-3.12\` or \`-3.13\` in the Windows environment-creation command. PowerShell commands use the virtual environment's Python directly, so activating PowerShell scripts is unnecessary.
+
+### What to expect
+
+| Command | What it demonstrates | Successful result |
+| --- | --- | --- |
+| \`python demo.py\` | Satellite → Receiver delayed disclosure, valid messages, tampering, bad keys, replay and multiple intervals | Valid packets show \`ACCEPT\`; deliberately invalid cases show \`REJECT\` |
+| \`python -m pytest -q\` | Automated functional and adversarial regression tests | Pytest finishes with all tests passing (exit code 0) |
+| \`python verification/check_invariants.py\` | Finite timing-input grids and fixed replay/forgery traces against the Python implementation | Prints \`Finite implementation checks passed\` (exit code 0) |
+
+**Additional model-checking evidence:** An independent finite TLA+ model, including expected attack counterexamples, is explained in [VERIFICATION.md](VERIFICATION.md) and [the model-specific run guide](verification/model/README.md). The GitHub Actions [test workflow](.github/workflows/tests.yml) runs the Python tests, finite checks, and pinned TLA+ model automatically.
+
+**Secrets:** The demo and regression tests do not need you to set a permanent master key manually. For your **own encrypted HSM export/import** experiment, set the \`MINITESLA_MASTER_KEY\` environment variable as described in [HSM persistence](#hsm-persistence). Never commit a real master key or encrypted state file.
+
+For the reproducible **hash-locked dependency installation used by CI**, see [Audit hardening and operational assumptions](#audit-hardening-and-operational-assumptions).
+
+---
+
+
 ## Implementation summary
 
 The solution uses:
@@ -160,7 +211,7 @@ This table is also the quickest review path: each requirement maps directly to a
 - tests/test_protocol.py — automated positive, negative, timing, tampering, replay, persistence, and ordering tests
 - SECURITY.md — threat model, trust assumptions, timing rule, persistence design, and scope limits
 - VERIFICATION.md — security invariants, proof obligations, trusted computing base, and verification evidence
-- verification/check_invariants.py — bounded exhaustive exploration of timing, disclosure, replay, and post-disclosure forgery states
+- verification/check_invariants.py — finite timing-input grids and fixed adversarial replay/forgery traces
 - .github/workflows/tests.yml — CI test matrix for Python 3.11, 3.12, and 3.13
 
 ## Key-chain model
@@ -175,13 +226,14 @@ The Receiver validates a disclosed K[i] by hashing it i times and comparing the 
 
 ## Delayed disclosure safety rule
 
-The Receiver does not authenticate a message immediately. It first checks that the message arrived before the key could have been disclosed:
+The Receiver does not authenticate a message immediately. It checks that the claimed packet interval is not in the future, and that the key is still guaranteed to be undisclosed under the configured sender-ahead bound:
 
-    receiver_interval < packet_interval + disclosure_delay
+    packet_interval <= receiver_interval
+    receiver_interval + max_sender_ahead < packet_interval + disclosure_delay
 
-Only packets satisfying that condition are buffered. Once the interval key is legitimately disclosed and validated against the commitment, the Receiver verifies the buffered HMAC-SHA256 tag.
+Here \`max_sender_ahead\` (B) is a *trusted upper bound* on how far ahead the sender can be relative to the receiver. The default B=0 assumes synchronized logical intervals; the simulator does **not** establish clock synchronization itself. Only packets satisfying the checks are buffered. After the key has been disclosed and validated against the commitment, the Receiver verifies the buffered HMAC-SHA256 tag.
 
-This timing check is important: accepting a newly arriving packet after its key could already be public would allow an attacker who knows the disclosed key to forge a valid MAC.
+This timing check is essential: after an interval key becomes public, an attacker can compute a valid HMAC for a forged old-interval packet, so late arrivals must be rejected. The assumptions and availability trade-offs are detailed in [SECURITY.md](SECURITY.md).
 
 ## Deterministic authenticated representation
 
@@ -202,10 +254,12 @@ Each logical message is identified by the pair (interval, sequence).
 
 The Receiver rejects:
 
-- a duplicate identity that is already buffered
-- a message identity that was already authenticated and accepted
-- packets arriving after their key-disclosure point
-- packets for intervals whose keys are already disclosed
+- an **exact duplicate candidate** that is already buffered
+- new packets arriving at or after their key-disclosure boundary
+- packets for intervals already closed by validated disclosure
+- any second valid candidate with the same \`(interval, sequence)\` during disclosure processing
+
+To resist an attacker pre-claiming a sequence number with one bogus MAC, the Receiver can buffer a **small bounded number of distinct candidates** for the same identity and authenticates at most one. The buffer and candidate limits are documented in [SECURITY.md](SECURITY.md); this is not a guarantee of availability under flooding.
 
 ## HSM persistence
 
