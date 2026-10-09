@@ -14,14 +14,35 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install
-        run: python -m pip install -e '.[dev]'
+          cache-dependency-path: requirements-ci.txt
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes -r requirements-ci.txt
+      - name: Install package without dependency resolution
+        run: python -m pip install --no-deps --no-build-isolation -e .
       - name: Test
         run: pytest
-      - name: Bounded invariant verification
+      - name: Finite input-grid and adversarial trace checks
         run: python verification/check_invariants.py
+
+  model-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download and verify pinned TLC tool
+        run: |
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/tla2tools.jar" \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" | sha256sum --check
+      - name: Check finite model and expected counterexamples
+        env:
+          TLA2TOOLS_JAR: ${{ runner.temp }}/tla2tools.jar
+        run: python3 verification/model/run_models.py

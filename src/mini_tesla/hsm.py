@@ -13,6 +13,7 @@ import hmac as stdlib_hmac
 import json
 import os
 import secrets
+import tempfile
 from pathlib import Path
 from typing import Final
 
@@ -25,6 +26,8 @@ TAG_SIZE: Final = 32
 NONCE_SIZE: Final = 12
 FILE_MAGIC: Final = b"MINITESLA-HSM\x01"
 DEFAULT_MASTER_KEY_ENV: Final = "MINITESLA_MASTER_KEY"
+MAX_CHAIN_LENGTH: Final = 4096
+MAX_STATE_FILE_SIZE: Final = 1_048_576
 
 
 class HSMError(Exception):
@@ -58,6 +61,41 @@ def _unb64(value: str) -> bytes:
         raise PersistenceError("invalid base64 data in HSM state") from exc
 
 
+def _require_chain_length(value: int) -> None:
+    if type(value) is not int or not 1 <= value <= MAX_CHAIN_LENGTH:
+        raise ValueError(f"chain_length must be an integer in [1, {MAX_CHAIN_LENGTH}]")
+
+
+def _unique_object(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError("duplicate JSON field")
+        result[name] = value
+    return result
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError(f"non-JSON numeric constant {value}")
+
+
+def _decode_keys(value: object, chain_length: int) -> dict[int, bytes]:
+    if type(value) is not dict:
+        raise ValueError("key map must be an object")
+    result = {}
+    for index, key in value.items():
+        if (type(index) is not str or not index.isascii() or not index.isdecimal()
+                or index.startswith("0") or len(index) > len(str(MAX_CHAIN_LENGTH))):
+            raise ValueError("key index must be a canonical positive decimal integer")
+        number = int(index)
+        if not 1 <= number <= chain_length:
+            raise ValueError("key index is outside the configured chain")
+        if type(key) is not str:
+            raise ValueError("encoded key must be a string")
+        result[number] = _unb64(key)
+    return result
+
+
 def master_key_from_env(name: str = DEFAULT_MASTER_KEY_ENV) -> bytes:
     """Load a base64-encoded 32-byte AES-256 master key from an environment variable."""
 
@@ -85,25 +123,53 @@ class HSM:
         auth_keys: dict[int, bytes] | None = None,
         disclosed_keys: dict[int, bytes] | None = None,
     ) -> None:
-        if role not in {"satellite", "receiver"}:
+        if type(role) is not str or role not in {"satellite", "receiver"}:
             raise ValueError("role must be 'satellite' or 'receiver'")
-        if len(commitment) != KEY_SIZE:
+        if type(commitment) is not bytes or len(commitment) != KEY_SIZE:
             raise ValueError("commitment must be 32 bytes")
-        if chain_length < 1:
-            raise ValueError("chain_length must be at least 1")
+        _require_chain_length(chain_length)
+
+        auth_keys = {} if auth_keys is None else auth_keys
+        disclosed_keys = {} if disclosed_keys is None else disclosed_keys
+        for keys in (auth_keys, disclosed_keys):
+            if type(keys) is not dict:
+                raise ValueError("keys must be dictionaries")
+            if any(type(i) is not int or not 1 <= i <= chain_length
+                   or type(key) is not bytes or len(key) != KEY_SIZE for i, key in keys.items()):
+                raise ValueError("invalid key index or length")
+        if role == "receiver" and auth_keys:
+            raise ValueError("receiver cannot contain undisclosed authentication keys")
+        if role == "satellite":
+            if set(auth_keys) != set(range(1, chain_length + 1)) or disclosed_keys:
+                raise ValueError("satellite requires one complete chain and no receiver key cache")
+            previous = commitment
+            for index in range(1, chain_length + 1):
+                if not stdlib_hmac.compare_digest(_sha256(auth_keys[index]), previous):
+                    raise ValueError("authentication chain does not match commitment")
+                previous = auth_keys[index]
+        # Validate sparse cached keys against one another and finally K0 in O(N),
+        # rather than independently hashing each key all the way to K0 in O(N²).
+        previous_index = 0
+        previous_key = commitment
+        for index in sorted(disclosed_keys):
+            candidate = disclosed_keys[index]
+            for _ in range(index - previous_index):
+                candidate = _sha256(candidate)
+            if not stdlib_hmac.compare_digest(candidate, previous_key):
+                raise ValueError("cached disclosure does not match commitment")
+            previous_index, previous_key = index, disclosed_keys[index]
 
         self._role = role
         self._commitment = bytes(commitment)
         self._chain_length = chain_length
-        self._auth_keys = dict(auth_keys or {})
-        self._disclosed_keys = dict(disclosed_keys or {})
+        self._auth_keys = dict(auth_keys)
+        self._disclosed_keys = dict(disclosed_keys)
 
     @classmethod
     def create_satellite(cls, chain_length: int) -> "HSM":
         """Generate a fresh SHA-256 one-way chain using CSPRNG key material."""
 
-        if chain_length < 1:
-            raise ValueError("chain_length must be at least 1")
+        _require_chain_length(chain_length)
 
         chain: list[bytes] = [b""] * (chain_length + 1)
         chain[chain_length] = secrets.token_bytes(KEY_SIZE)
@@ -134,7 +200,7 @@ class HSM:
         return self._role
 
     def _require_interval(self, interval: int) -> None:
-        if not isinstance(interval, int) or isinstance(interval, bool):
+        if type(interval) is not int:
             raise HSMError("interval must be an integer")
         if not 1 <= interval <= self._chain_length:
             raise HSMError("interval is outside the configured key chain")
@@ -159,8 +225,10 @@ class HSM:
         if self._role != "satellite":
             raise HSMError("receiver HSM has no undisclosed satellite keys")
         self._require_interval(interval)
-        if disclosure_delay < 1:
-            raise HSMError("disclosure_delay must be at least 1")
+        if type(disclosure_delay) is not int or not 1 <= disclosure_delay <= 2**32 - 1:
+            raise HSMError("disclosure_delay must be a positive uint32 integer")
+        if type(current_interval) is not int or current_interval < 1:
+            raise HSMError("current_interval must be a positive integer")
         if current_interval < interval + disclosure_delay:
             raise EarlyDisclosureError(
                 f"key for interval {interval} is not disclosable until interval "
@@ -174,7 +242,7 @@ class HSM:
         if self._role != "receiver":
             raise HSMError("satellite HSM does not import disclosed receiver keys")
         self._require_interval(interval)
-        if not isinstance(key, bytes) or len(key) != KEY_SIZE:
+        if type(key) is not bytes or len(key) != KEY_SIZE:
             raise InvalidKeyDisclosure("disclosed key must be exactly 32 bytes")
 
         candidate = key
@@ -229,13 +297,25 @@ class HSM:
         nonce = secrets.token_bytes(NONCE_SIZE)
         ciphertext = AESGCM(master_key).encrypt(nonce, plaintext, FILE_MAGIC)
 
-        output_path = Path(path)
+        temporary = None
         try:
-            output_path.write_bytes(FILE_MAGIC + nonce + ciphertext)
-            # Best-effort restrictive permissions on POSIX-like systems.
-            os.chmod(output_path, 0o600)
-        except OSError as exc:
+            output_path = Path(path)
+            fd, temporary = tempfile.mkstemp(prefix=f".{output_path.name}.", suffix=".tmp",
+                                              dir=output_path.parent)
+            # mkstemp creates mode 0600 on POSIX before any bytes are written.
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(FILE_MAGIC + nonce + ciphertext)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, output_path)
+        except (OSError, TypeError, ValueError) as exc:
             raise PersistenceError("unable to write encrypted HSM state") from exc
+        finally:
+            if temporary is not None:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
 
     @classmethod
     def import_encrypted(cls, path: str | os.PathLike[str]) -> "HSM":
@@ -244,9 +324,13 @@ class HSM:
         master_key = master_key_from_env()
 
         try:
-            blob = Path(path).read_bytes()
-        except OSError as exc:
+            with Path(path).open("rb") as stream:
+                blob = stream.read(MAX_STATE_FILE_SIZE + 1)
+        except (OSError, TypeError, ValueError) as exc:
             raise PersistenceError("unable to read encrypted HSM state") from exc
+
+        if len(blob) > MAX_STATE_FILE_SIZE:
+            raise PersistenceError("encrypted HSM state is too large")
 
         minimum = len(FILE_MAGIC) + NONCE_SIZE + 16
         if len(blob) < minimum or not blob.startswith(FILE_MAGIC):
@@ -257,37 +341,29 @@ class HSM:
         ciphertext = blob[nonce_start + NONCE_SIZE :]
         try:
             plaintext = AESGCM(master_key).decrypt(nonce, ciphertext, FILE_MAGIC)
-            state = json.loads(plaintext.decode("utf-8"))
-        except (InvalidTag, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            state = json.loads(plaintext.decode("utf-8"), object_pairs_hook=_unique_object,
+                               parse_constant=_reject_constant)
+        except (InvalidTag, UnicodeDecodeError, ValueError, RecursionError) as exc:
             raise PersistenceError("HSM file authentication/decryption failed") from exc
 
         try:
-            if state.get("version") != 1:
-                raise PersistenceError("unsupported HSM state version")
+            expected = {"version", "role", "chain_length", "commitment", "auth_keys", "disclosed_keys"}
+            if type(state) is not dict or set(state) != expected:
+                raise ValueError("HSM state has missing or unexpected fields")
+            if type(state["version"]) is not int or state["version"] != 1:
+                raise ValueError("unsupported HSM state version")
             role = state["role"]
-            chain_length = int(state["chain_length"])
+            chain_length = state["chain_length"]
+            _require_chain_length(chain_length)
+            if type(state["commitment"]) is not str:
+                raise ValueError("commitment must be an encoded string")
             commitment = _unb64(state["commitment"])
-            auth_keys = {int(i): _unb64(k) for i, k in state.get("auth_keys", {}).items()}
-            disclosed_keys = {
-                int(i): _unb64(k) for i, k in state.get("disclosed_keys", {}).items()
-            }
+            auth_keys = _decode_keys(state["auth_keys"], chain_length)
+            disclosed_keys = _decode_keys(state["disclosed_keys"], chain_length)
+            return cls(role=role, commitment=commitment, chain_length=chain_length,
+                       auth_keys=auth_keys, disclosed_keys=disclosed_keys)
         except (KeyError, TypeError, ValueError) as exc:
             raise PersistenceError("malformed HSM state") from exc
-
-        if role == "receiver" and auth_keys:
-            raise PersistenceError("receiver state must not contain undisclosed authentication keys")
-        if role == "satellite" and set(auth_keys) != set(range(1, chain_length + 1)):
-            raise PersistenceError("satellite state does not contain the complete key chain")
-        if any(len(key) != KEY_SIZE for key in [*auth_keys.values(), *disclosed_keys.values()]):
-            raise PersistenceError("persisted keys must be exactly 32 bytes")
-
-        return cls(
-            role=role,
-            commitment=commitment,
-            chain_length=chain_length,
-            auth_keys=auth_keys,
-            disclosed_keys=disclosed_keys,
-        )
 
     def __repr__(self) -> str:
         return (

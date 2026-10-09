@@ -1,80 +1,29 @@
-name: cleanup merged branches
+name: cleanup merged branch
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
-    types:
-      - closed
-    branches:
-      - main
-  workflow_dispatch:
+    types: [closed]
+    branches: [main]
 
 permissions:
-  contents: write
-  pull-requests: read
+  contents: read
 
 jobs:
   cleanup:
-    if: github.repository_owner == 'Girish2052003'
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.repository_owner == 'Girish2052003'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
     steps:
-      - name: Delete only branches proven merged into main
-        uses: actions/github-script@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const { data: repository } = await github.rest.repos.get({ owner, repo });
-            const protectedBranch = repository.default_branch;
-
-            if (protectedBranch !== 'main') {
-              core.setFailed(`Safety stop: default branch is ${protectedBranch}, expected main.`);
-              return;
-            }
-
-            const branches = await github.paginate(
-              github.rest.repos.listBranches,
-              { owner, repo, per_page: 100 }
-            );
-
-            for (const branch of branches) {
-              const name = branch.name;
-
-              // Absolute safety guard: never delete the default/main branch.
-              if (name === protectedBranch || name === 'main') {
-                core.info(`KEEP ${name}: authoritative branch`);
-                continue;
-              }
-
-              const pulls = await github.paginate(
-                github.rest.pulls.list,
-                {
-                  owner,
-                  repo,
-                  state: 'closed',
-                  head: `${owner}:${name}`,
-                  base: protectedBranch,
-                  per_page: 100,
-                }
-              );
-
-              const merged = pulls.some(
-                (pr) => pr.merged_at !== null && pr.base.ref === protectedBranch
-              );
-
-              if (!merged) {
-                core.warning(
-                  `KEEP ${name}: no merged PR into ${protectedBranch}; refusing automatic deletion`
-                );
-                continue;
-              }
-
-              core.info(`DELETE ${name}: GitHub confirms a merged PR into ${protectedBranch}`);
-              await github.rest.git.deleteRef({
-                owner,
-                repo,
-                ref: `heads/${name}`,
-              });
-            }
+          ref: main
+          fetch-depth: 0
+      - name: Delete only this PR's unchanged merged head
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/cleanup_merged_branch.py

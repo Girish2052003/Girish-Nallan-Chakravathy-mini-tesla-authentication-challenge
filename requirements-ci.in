@@ -1,0 +1,4 @@
+# Exact versions exercised by the independent audit; compile to a hash-locked file.
+cryptography==46.0.7
+pytest==9.1.1
+setuptools==84.0.0

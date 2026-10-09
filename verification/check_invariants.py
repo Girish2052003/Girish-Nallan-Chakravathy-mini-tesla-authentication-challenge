@@ -1,9 +1,7 @@
-"""Bounded exhaustive checks for the Mini-TESLA protocol invariants.
+"""Finite input-grid checks and three fixed adversarial traces.
 
-This is not a proof of SHA-256, HMAC, or AES-GCM. Those primitives are treated as
-trusted cryptographic building blocks. The script systematically explores a
-finite state space of protocol intervals and disclosure delays against the real
-Satellite/Receiver implementation.
+This exercises real Python code. It is not exhaustive protocol-state exploration,
+a model checker, or a proof of the implementation or cryptographic primitives.
 """
 
 from __future__ import annotations
@@ -19,35 +17,37 @@ def check_receive_timing() -> int:
 
     checked = 0
     chain_length = 4
-    for delay in range(1, 4):
-        for packet_interval in range(1, chain_length + 1):
-            for receiver_interval in range(1, chain_length + delay + 2):
-                satellite = Satellite(chain_length=chain_length, disclosure_delay=delay)
-                receiver = Receiver(
-                    commitment=satellite.commitment,
-                    chain_length=chain_length,
-                    disclosure_delay=delay,
-                )
-                if packet_interval > 1:
-                    satellite.advance(packet_interval - 1)
-                packet = satellite.authenticate(
-                    f"probe:{delay}:{packet_interval}:{receiver_interval}".encode()
-                )
-                if receiver_interval > 1:
-                    receiver.advance(receiver_interval - 1)
+    for bound in range(3):
+        for delay in range(1, 4):
+            for packet_interval in range(1, chain_length + 1):
+                for receiver_interval in range(1, chain_length + delay + 2):
+                    satellite = Satellite(chain_length=chain_length, disclosure_delay=delay)
+                    receiver = Receiver(
+                        commitment=satellite.commitment,
+                        chain_length=chain_length,
+                        disclosure_delay=delay,
+                        max_sender_ahead=bound,
+                    )
+                    if packet_interval > 1:
+                        satellite.advance(packet_interval - 1)
+                    packet = satellite.authenticate(
+                        f"probe:{delay}:{packet_interval}:{receiver_interval}".encode()
+                    )
+                    if receiver_interval > 1:
+                        receiver.advance(receiver_interval - 1)
 
-                should_buffer = (
-                    receiver_interval >= packet_interval
-                    and receiver_interval < packet_interval + delay
-                )
-                try:
-                    result = receiver.receive(packet)
-                except PacketRejected:
-                    assert not should_buffer
-                else:
-                    assert should_buffer
-                    assert result == "buffered"
-                checked += 1
+                    should_buffer = (
+                        receiver_interval >= packet_interval
+                        and receiver_interval + bound < packet_interval + delay
+                    )
+                    try:
+                        result = receiver.receive(packet)
+                    except PacketRejected:
+                        assert not should_buffer
+                    else:
+                        assert should_buffer
+                        assert result == "buffered"
+                    checked += 1
     return checked
 
 
@@ -140,9 +140,9 @@ def main() -> None:
     replay_states = check_replay_and_post_disclosure_forgery()
     total = receive_states + disclosure_states + replay_states
 
-    print(f"Bounded verification passed: {total} protocol states/checks")
-    print(f"  receive timing states: {receive_states}")
-    print(f"  disclosure states:     {disclosure_states}")
+    print(f"Finite implementation checks passed: {total} cases/checks")
+    print(f"  receive timing grid:   {receive_states}")
+    print(f"  disclosure timing grid: {disclosure_states}")
     print(f"  replay/forgery checks: {replay_states}")
 
 
