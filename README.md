@@ -148,7 +148,7 @@ The implementation is intentionally small and explicit. The Satellite and Receiv
 | AES-256-GCM local export/import | `HSM.export_encrypted()` and `HSM.import_encrypted()` |
 | Master key from environment | persistence methods read `MINITESLA_MASTER_KEY` directly |
 | Required demonstration | `demo.py` |
-| Automated testing | 25 pytest cases plus GitHub Actions |
+| Automated testing | Original scenarios and audit regression suite plus GitHub Actions |
 
 This table is also the quickest review path: each requirement maps directly to a small method or test rather than to a large framework.
 
@@ -312,7 +312,7 @@ The automated suite additionally checks:
 - HSM role separation
 - post-disclosure forgery even when the attacker computes a valid HMAC
 
-## Bounded protocol verification
+## Verification and assurance limits
 
 Alongside the unit/adversarial suite, the repository includes an executable invariant checker over the real implementation:
 
@@ -320,10 +320,46 @@ Alongside the unit/adversarial suite, the repository includes an executable inva
 python verification/check_invariants.py
 ```
 
-It systematically explores small interval/disclosure state spaces and checks the core TESLA safety condition, key-disclosure timing, commitment linkage, replay rejection, and rejection of a **cryptographically valid HMAC forged after the key has already been disclosed**.
+It checks two finite timing input grids and three fixed adversarial traces covering the core TESLA safety condition, key-disclosure timing, commitment linkage, replay rejection, and rejection of a **cryptographically valid HMAC forged after the key has already been disclosed**.
 
-The exact invariants and the limits of this verification claim are documented in `VERIFICATION.md`. This is bounded implementation-level verification, not a claim to have formally proved SHA-256, HMAC, AES-GCM, Python, or the underlying crypto library.
+The exact invariants and the limits of this verification claim are documented in `VERIFICATION.md`. The independent finite TLA+ model is in `verification/model/`; its runner checks positive safety configurations, attack counterexamples, and non-vacuity witnesses. Neither tool proves the Python implementation or the cryptographic primitives. No formal refinement or unbounded proof is claimed.
 
 ## Notes on scope
 
 This implementation follows the challenge requirement for a simplified TESLA-based protocol. Logical intervals model time; it does not implement clock synchronization, a network transport, a physical HSM, complete TESLA, or Galileo OSNMA. Those boundaries are documented in SECURITY.md.
+
+
+## Audit hardening and operational assumptions
+
+Receiver time must provide a trusted upper bound on sender time: configure
+`max_sender_ahead=B` such that `sender_interval <= receiver_interval + B` on
+every arrival. Default B=0 assumes synchronized logical clocks. Admission uses
+`receiver_interval + B < packet_interval + disclosure_delay`. A larger margin
+reduces the receive window; B at least the disclosure delay closes it entirely.
+The simulation does not establish clock synchronization.
+
+The receiver permits up to four distinct candidates per identity, 256 packets per
+interval, 1024 total packets, and 8 MiB of canonical messages plus tags by default.
+The byte counter excludes Python object overhead and the extra payload snapshot.
+These limits are constructor arguments; a full limit rejects admission. Missing
+disclosures expire after eight additional local intervals by default. This bounds
+retained state but cannot guarantee delivery under flooding or prolonged loss.
+
+Packet metadata is strictly typed and range checked. HSM import validates a strict
+schema and chain consistency after AEAD authentication; encrypted files are
+replaced atomically using a restrictive temporary file. HSM persistence does not
+restore protocol clocks, counters, buffers, or session replay state. Do not restart
+an existing chain at interval one. Use a fresh session/commitment or a separately
+designed trusted recovery protocol. See `SECURITY.md`.
+
+For the exact dependency versions used by CI:
+
+```bash
+python -m pip install --require-hashes -r requirements-ci.txt
+python -m pip install --no-deps --no-build-isolation -e .
+```
+
+CI tests Python 3.11, 3.12, and 3.13; other versions allowed by package metadata
+are not represented by that matrix. CI actions are pinned to full commit SHAs.
+The lock can be regenerated with `uv pip compile requirements-ci.in
+--generate-hashes --output-file requirements-ci.txt` after an intentional review.
