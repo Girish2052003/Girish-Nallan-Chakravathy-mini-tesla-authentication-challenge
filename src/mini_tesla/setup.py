@@ -12,7 +12,7 @@ import re
 import secrets
 import struct
 from dataclasses import dataclass, replace
-from typing import Final
+from typing import Callable, Final
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -128,11 +128,15 @@ class ReceiverBootstrap:
     """
 
     def __init__(self, *, trusted_public_key: Ed25519PublicKey,
-                 expected_satellite_id: str) -> None:
+                 expected_satellite_id: str,
+                 trusted_interval_source: Callable[[], int]) -> None:
         if not isinstance(trusted_public_key, Ed25519PublicKey):
             raise TypeError("trusted_public_key must be an Ed25519 public key")
         if type(expected_satellite_id) is not str or _ID_PATTERN.fullmatch(expected_satellite_id) is None:
             raise ValueError("invalid expected_satellite_id")
+        if not callable(trusted_interval_source):
+            raise TypeError("trusted_interval_source must be callable")
+        self._trusted_interval_source = trusted_interval_source
         self._trusted_public_key = trusted_public_key
         self._expected_satellite_id = expected_satellite_id
         self._challenge = secrets.token_bytes(CHALLENGE_SIZE)
@@ -171,8 +175,22 @@ class ReceiverBootstrap:
         except InvalidSignature as exc:
             raise SetupRejected("setup signature verification failed") from exc
 
-        # Caller-controlled limits are local receiver policy, NOT data supplied
-        # by the untrusted sender; the signed disclosure delay is protocol state.
+        # The caller's trusted clock is expressed in THIS sender session's
+        # logical intervals; S <= R + B must hold throughout the session.
+        # A challenged signature alone does not prove that K[1] is still secret.
+        try:
+            current = self._trusted_interval_source()
+        except Exception as exc:
+            raise SetupRejected("trusted interval source failed") from exc
+        if type(current) is not int or not 1 <= current <= MAX_UINT32:
+            raise SetupRejected("trusted interval source returned an invalid interval")
+        if type(max_sender_ahead) is not int or not 0 <= max_sender_ahead <= MAX_UINT32:
+            raise SetupRejected("max_sender_ahead must be a nonnegative uint32 integer")
+        if current + max_sender_ahead >= 1 + setup.disclosure_delay:
+            raise SetupRejected("signed setup arrived after the safe first-key admission deadline")
+
+        # Receiver policy is local; no untrusted setup field can override it.
+        # The live source is checked again for every packet and disclosure.
         receiver = Receiver(
             commitment=setup.commitment,
             chain_length=setup.chain_length,
@@ -183,6 +201,8 @@ class ReceiverBootstrap:
             max_packets_per_interval=max_packets_per_interval,
             max_candidates_per_identity=max_candidates_per_identity,
             disclosure_grace=disclosure_grace,
+            initial_interval=current,
+            trusted_interval_source=self._trusted_interval_source,
         )
         self._used = True
         return receiver

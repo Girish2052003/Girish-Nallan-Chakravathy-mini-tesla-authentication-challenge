@@ -28,6 +28,7 @@ def main() -> None:
     bootstrap = ReceiverBootstrap(
         trusted_public_key=signing_key.public_key(),
         expected_satellite_id="satellite-alpha",
+        trusted_interval_source=lambda: satellite.current_interval,
     )
 
     # An attacker can create an entirely valid alternative TESLA key chain,
@@ -61,7 +62,6 @@ def main() -> None:
     receiver.receive(valid)
 
     satellite.advance()
-    receiver.advance()
     key1 = satellite.disclose(1)
     print_results("interval 1", receiver.process_disclosure(1, key1))
 
@@ -73,7 +73,6 @@ def main() -> None:
     packet2 = satellite.authenticate(b"telemetry=temp:19.4")
     receiver.receive(packet2)
     satellite.advance()
-    receiver.advance()
 
     try:
         receiver.process_disclosure(2, secrets.token_bytes(32))
@@ -88,7 +87,6 @@ def main() -> None:
     bad_tag[0] ^= 0x01
     receiver.receive(replace(packet3, tag=bytes(bad_tag)))
     satellite.advance()
-    receiver.advance()
     key3 = satellite.disclose(3)
     print_results("interval 3", receiver.process_disclosure(3, key3))
 

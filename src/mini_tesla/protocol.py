@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, replace
-from typing import Final
+from typing import Callable, Final
 
 from .hsm import HSM, HSMError, TAG_SIZE
 
@@ -144,7 +144,9 @@ class Receiver(_Clock):
     def __init__(self, *, commitment: bytes, chain_length: int, disclosure_delay: int = 1,
                  max_sender_ahead: int = 0, max_buffered_packets: int = 1024,
                  max_buffered_bytes: int = 8_388_608, max_packets_per_interval: int = 256,
-                 max_candidates_per_identity: int = 4, disclosure_grace: int = 8) -> None:
+                 max_candidates_per_identity: int = 4, disclosure_grace: int = 8,
+                 initial_interval: int = 1,
+                 trusted_interval_source: Callable[[], int] | None = None) -> None:
         for name, value in (("disclosure_delay", disclosure_delay),
                             ("max_buffered_packets", max_buffered_packets),
                             ("max_buffered_bytes", max_buffered_bytes),
@@ -153,9 +155,13 @@ class Receiver(_Clock):
                             ("disclosure_grace", disclosure_grace)):
             _integer(value, 1, UINT32_MAX, name)
         _integer(max_sender_ahead, 0, UINT32_MAX, "max_sender_ahead")
+        _integer(initial_interval, 1, UINT32_MAX, "initial_interval")
+        if trusted_interval_source is not None and not callable(trusted_interval_source):
+            raise TypeError("trusted_interval_source must be callable")
         self.hsm = HSM.create_receiver(commitment, chain_length)
         self._disclosure_delay = disclosure_delay
-        self._current_interval = 1
+        self._current_interval = initial_interval
+        self._trusted_interval_source = trusted_interval_source
         self._max_sender_ahead = max_sender_ahead
         self._max_buffered_packets = max_buffered_packets
         self._max_buffered_bytes = max_buffered_bytes
@@ -173,12 +179,38 @@ class Receiver(_Clock):
         self._buffered_bytes -= sum(len(data) + TAG_SIZE for _, data in entries)
         return entries
 
-    def advance(self, steps: int = 1) -> int:
-        super().advance(steps)
+    def _expire_buffers(self) -> None:
         for interval in list(self._buffer):
-            if self.current_interval >= interval + self.disclosure_delay + self._disclosure_grace:
+            if self._current_interval >= interval + self.disclosure_delay + self._disclosure_grace:
                 self._take_interval(interval)
-        return self.current_interval
+
+    def _refresh_trusted_interval(self) -> None:
+        """Fail closed if host time becomes invalid or moves backward."""
+        source = self._trusted_interval_source
+        if source is None:
+            return
+        try:
+            observed = source()
+        except Exception as exc:
+            raise ProtocolError("trusted interval source failed") from exc
+        if type(observed) is not int or not 1 <= observed <= UINT32_MAX:
+            raise ProtocolError("trusted interval source returned an invalid interval")
+        if observed < self._current_interval:
+            raise ProtocolError("trusted interval source moved backward")
+        self._current_interval = observed
+        self._expire_buffers()
+
+    @property
+    def current_interval(self) -> int:
+        self._refresh_trusted_interval()
+        return self._current_interval
+
+    def advance(self, steps: int = 1) -> int:
+        if self._trusted_interval_source is not None:
+            raise ProtocolError("trusted-clock receiver cannot be advanced manually")
+        super().advance(steps)
+        self._expire_buffers()
+        return self._current_interval
 
     def _validate_packet_shape(self, packet: AuthPacket) -> bytes:
         if type(packet) is not AuthPacket:
@@ -201,6 +233,7 @@ class Receiver(_Clock):
 
     def receive(self, packet: AuthPacket) -> str:
         """Apply the safety condition and reserve bounded candidate storage."""
+        self._refresh_trusted_interval()
         data = self._validate_packet_shape(packet)
         if self.hsm.has_disclosed_key(packet.interval):
             raise ReplayDetected("authentication key for this interval is already disclosed")
@@ -227,6 +260,7 @@ class Receiver(_Clock):
 
     def process_disclosure(self, interval: int, key: bytes) -> list[VerificationResult]:
         """Authenticate a key before removing or processing its candidate batch."""
+        self._refresh_trusted_interval()
         if type(interval) is not int or not 1 <= interval <= self.hsm.chain_length:
             raise DisclosureRejected("interval must be an integer within the key chain")
         if self.current_interval < interval + self.disclosure_delay:

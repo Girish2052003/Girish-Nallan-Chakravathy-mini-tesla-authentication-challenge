@@ -20,6 +20,7 @@ def setup_pair():
     bootstrap = ReceiverBootstrap(
         trusted_public_key=signing_key.public_key(),
         expected_satellite_id="satellite-alpha",
+        trusted_interval_source=lambda: satellite.current_interval,
     )
     response = sign_satellite_setup(
         satellite, signing_key=signing_key,
@@ -36,7 +37,7 @@ def test_valid_signed_setup_then_tesla_authentication(setup_pair):
     packet = satellite.authenticate(b"real telemetry")
     assert receiver.receive(packet) == "buffered"
     satellite.advance(2)
-    receiver.advance(2)
+    assert receiver.current_interval == 3
     results = receiver.process_disclosure(1, satellite.disclose(1))
     assert len(results) == 1 and results[0].accepted
 
@@ -79,6 +80,7 @@ def test_old_signed_setup_does_not_satisfy_new_receiver_challenge(setup_pair):
     new_bootstrap = ReceiverBootstrap(
         trusted_public_key=key.public_key(),
         expected_satellite_id="satellite-alpha",
+        trusted_interval_source=lambda: 1,
     )
     assert new_bootstrap.challenge != old_bootstrap.challenge
     with pytest.raises(SetupRejected, match="fresh receiver challenge"):
@@ -91,6 +93,7 @@ def test_valid_signature_under_untrusted_identity_key_is_rejected(setup_pair):
     wrong_identity = ReceiverBootstrap(
         trusted_public_key=Ed25519PrivateKey.generate().public_key(),
         expected_satellite_id="satellite-alpha",
+        trusted_interval_source=lambda: 1,
     )
     # Real signature for the right nonce still fails under a wrongly pinned key.
     signed = sign_satellite_setup(
@@ -142,6 +145,7 @@ def test_no_untrusted_auto_key_provisioning():
         ReceiverBootstrap(
             trusted_public_key=attacker_key.private_bytes,  # type: ignore[arg-type]
             expected_satellite_id="satellite-alpha",
+            trusted_interval_source=lambda: 1,
         )
 
 
@@ -169,8 +173,8 @@ def test_session_config_signed_bytes_are_deterministic(setup_pair):
 
 def test_nonce_is_fresh_and_not_derived_from_sender():
     key = Ed25519PrivateKey.generate()
-    a = ReceiverBootstrap(trusted_public_key=key.public_key(), expected_satellite_id="satellite-alpha")
-    b = ReceiverBootstrap(trusted_public_key=key.public_key(), expected_satellite_id="satellite-alpha")
+    a = ReceiverBootstrap(trusted_public_key=key.public_key(), expected_satellite_id="satellite-alpha", trusted_interval_source=lambda: 1)
+    b = ReceiverBootstrap(trusted_public_key=key.public_key(), expected_satellite_id="satellite-alpha", trusted_interval_source=lambda: 1)
     assert len(a.challenge) == 32 and len(b.challenge) == 32
     assert a.challenge != b.challenge
 
@@ -193,6 +197,7 @@ def test_sender_cannot_sign_same_chain_for_two_new_receivers(setup_pair):
     another_receiver = ReceiverBootstrap(
         trusted_public_key=key.public_key(),
         expected_satellite_id="satellite-alpha",
+        trusted_interval_source=lambda: 1,
     )
     with pytest.raises(SetupRejected, match="fresh, unused"):
         sign_satellite_setup(
@@ -232,3 +237,124 @@ def test_rejected_setup_does_not_burn_unused_satellite_chain():
         challenge=secrets.token_bytes(32),
     )
     assert len(signed.signature) == 64
+
+# Critical regression: a valid signature may be delivered AFTER the
+# satellite has disclosed K[1]. Signature verification must not reset time.
+def test_delayed_genuine_signed_setup_is_rejected_after_first_disclosure(setup_pair):
+    satellite, _, bootstrap, signed = setup_pair
+    # Fixture delay = 2; K1 becomes public at sender interval 3.
+    satellite.advance(2)
+    satellite.disclose(1)
+    with pytest.raises(SetupRejected, match="safe first-key"):
+        bootstrap.establish(signed)
+
+
+def test_delayed_setup_near_boundary_respects_clock_skew_bound():
+    key = Ed25519PrivateKey.generate()
+    satellite = Satellite(chain_length=4, disclosure_delay=2)
+    receiver_clock = [1]
+    bootstrap = ReceiverBootstrap(
+        trusted_public_key=key.public_key(),
+        expected_satellite_id="satellite-alpha",
+        trusted_interval_source=lambda: receiver_clock[0],
+    )
+    signed = sign_satellite_setup(
+        satellite, signing_key=key,
+        satellite_id="satellite-alpha", challenge=bootstrap.challenge,
+    )
+    satellite.advance()
+    receiver_clock[0] = 2
+    # B=1 allows the sender to have reached interval 3 and disclosed K1.
+    with pytest.raises(SetupRejected, match="safe first-key"):
+        bootstrap.establish(signed, max_sender_ahead=1)
+    # The failed attempt does not consume this nonce. With an independently
+    # established B=0 bound, R=2 implies S <= 2 and K1 remains undisclosed.
+    receiver = bootstrap.establish(signed, max_sender_ahead=0)
+    assert receiver.current_interval == 2
+
+
+def test_live_trusted_clock_blocks_post_disclosure_hmac_forgery():
+    import hashlib
+    import hmac
+    from mini_tesla import AuthPacket, PacketRejected
+
+    key = Ed25519PrivateKey.generate()
+    satellite = Satellite(chain_length=4, disclosure_delay=2)
+    clock = [1]
+    bootstrap = ReceiverBootstrap(
+        trusted_public_key=key.public_key(),
+        expected_satellite_id="satellite-alpha",
+        trusted_interval_source=lambda: clock[0],
+    )
+    signed = sign_satellite_setup(
+        satellite, signing_key=key,
+        satellite_id="satellite-alpha", challenge=bootstrap.challenge,
+    )
+    receiver = bootstrap.establish(signed)
+    satellite.advance(2)
+    clock[0] = 3
+    disclosed_key = satellite.disclose(1)
+    forged = AuthPacket(interval=1, sequence=777, disclosure_delay=2,
+                        payload=b"malicious", tag=b"")
+    forged = replace(
+        forged, tag=hmac.new(disclosed_key, forged.authenticated_bytes(), hashlib.sha256).digest()
+    )
+    with pytest.raises(PacketRejected, match="key-disclosure interval"):
+        receiver.receive(forged)
+    assert receiver.buffered_count == 0
+
+
+def test_verified_receiver_clock_cannot_be_advanced_manually(setup_pair):
+    from mini_tesla import ProtocolError
+    _, _, bootstrap, signed = setup_pair
+    receiver = bootstrap.establish(signed)
+    with pytest.raises(ProtocolError, match="manually"):
+        receiver.advance()
+
+
+def test_verified_receiver_fails_closed_on_clock_rollback():
+    from mini_tesla import ProtocolError
+    key = Ed25519PrivateKey.generate()
+    satellite = Satellite(chain_length=4, disclosure_delay=2)
+    clock = [1]
+    bootstrap = ReceiverBootstrap(
+        trusted_public_key=key.public_key(),
+        expected_satellite_id="satellite-alpha",
+        trusted_interval_source=lambda: clock[0],
+    )
+    signed = sign_satellite_setup(
+        satellite, signing_key=key,
+        satellite_id="satellite-alpha", challenge=bootstrap.challenge,
+    )
+    receiver = bootstrap.establish(signed)
+    clock[0] = 2
+    assert receiver.current_interval == 2
+    clock[0] = 1
+    with pytest.raises(ProtocolError, match="backward"):
+        receiver.receive(satellite.authenticate(b"should fail"))
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, 1.5, float("nan"), "1", None, 2**32])
+def test_invalid_trusted_time_rejects_signed_setup(bad):
+    key = Ed25519PrivateKey.generate()
+    satellite = Satellite(chain_length=4, disclosure_delay=2)
+    bootstrap = ReceiverBootstrap(
+        trusted_public_key=key.public_key(),
+        expected_satellite_id="satellite-alpha",
+        trusted_interval_source=lambda: bad,
+    )
+    signed = sign_satellite_setup(
+        satellite, signing_key=key,
+        satellite_id="satellite-alpha", challenge=bootstrap.challenge,
+    )
+    with pytest.raises(SetupRejected, match="invalid interval"):
+        bootstrap.establish(signed)
+
+
+def test_signed_bootstrap_no_longer_accepts_without_trusted_time():
+    key = Ed25519PrivateKey.generate()
+    with pytest.raises(TypeError):
+        ReceiverBootstrap(
+            trusted_public_key=key.public_key(),
+            expected_satellite_id="satellite-alpha",
+        )
