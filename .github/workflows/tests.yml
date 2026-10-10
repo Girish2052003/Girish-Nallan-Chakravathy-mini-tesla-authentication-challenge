@@ -30,6 +30,8 @@ jobs:
         run: pytest
       - name: Finite input-grid and adversarial trace checks
         run: python verification/check_invariants.py
+      - name: Signed-bootstrap time and signature input-grid checks
+        run: python verification/check_bootstrap.py
 
   model-check:
     runs-on: ubuntu-latest
@@ -45,4 +47,6 @@ jobs:
       - name: Check finite model and expected counterexamples
         env:
           TLA2TOOLS_JAR: ${{ runner.temp }}/tla2tools.jar
-        run: python3 verification/model/run_models.py
+        run: |
+          python3 verification/model/run_models.py
+          python3 verification/model/run_bootstrap_models.py

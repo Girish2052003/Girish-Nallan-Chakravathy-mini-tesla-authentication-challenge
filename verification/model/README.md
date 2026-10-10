@@ -86,3 +86,36 @@ explicit abstraction differences. The model does not prove Python refines it.
 The run script's expected outcomes also serve as a check that every configuration
 actually changes the intended model behavior. No claim of formal verification of
 the submitted Python program or of its cryptographic primitives follows.
+
+## Added signed-bootstrap and TESLA composition model
+
+The new `BootstrapTime.tla` is an independent finite symbolic model of
+initial commitment authentication, fresh receiver challenge, malicious
+setup delay, trusted receiver time, TESLA interval-key disclosure and
+post-disclosure forgery. Both models are checked in CI using the
+same pinned and SHA-256 verified TLC JAR.
+
+```bash
+python3 verification/model/run_models.py
+python3 verification/model/run_bootstrap_models.py
+```
+
+| Configuration | Verified outcome (TLC) |
+| --- | --- |
+| bootstrap_sync_d1 | Safety complete, 23 distinct states |
+| bootstrap_lag_d2 | Safety complete, 52 distinct states |
+| bootstrap_stale_legacy | Expected NoReleasedForgery counterexample: old time reset lets Eve forge |
+| bootstrap_unsafe_bound | Expected NoReleasedForgery counterexample: B underestimates actual sender lead |
+| bootstrap_broken_signature | Expected AuthenticatedAnchor counterexample |
+| bootstrap_broken_challenge | Expected ChallengeFreshness counterexample |
+| bootstrap_honest_witness | Expected NoHonestAuthentication counterexample, a positive non-vacuity witness |
+
+The model idealizes signature verification, nonce distinction and HMAC
+unforgeability. The negative controls intentionally disable each check.
+It covers a **single active session and one interval key**, not multi-chain
+key management, actual Ed25519 math, key compromise, trusted-clock
+provisioning, software memory, complete restart, or concurrency.
+Passing finite models does **not** prove the real Python code or
+cryptographic security without assumptions; a caller-supplied frozen
+or attacker-controlled clock invalidates the safety argument.
+
