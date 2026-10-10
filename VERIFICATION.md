@@ -26,10 +26,13 @@ trusted host execution. Replay of an old response fails because the new challeng
 differs, absent an astronomically unlikely nonce collision. This reasoning does
 not prove Ed25519, the Python code, or universal deployment security.
 
-The independent TLA+ model still checks **TESLA protocol safety only**, not the
-new signed-bootstrap layer. Its trusted K[0] assumption is now supplied by
-the *conditional* authenticated-setup argument. Do not interpret prior
-finite-model counts as proof of this implementation or signing scheme.
+The original independent `MiniTesla.tla` checks symbolic TESLA safety.
+The new independent `BootstrapTime.tla` composes symbolic signature/challenge
+verification, adversarially delayed setup, live versus stale receiver clocks,
+honest TESLA buffering and post-disclosure MAC forgeries. Its negative controls
+reproduce the old delayed-setup attack and violations caused by invalid
+signature, challenge and clock-bound assumptions. These models are finite,
+idealized checks, not a machine-checked proof of Python or Ed25519.
 
 ## Invariants and implementation evidence
 
@@ -46,6 +49,9 @@ finite-model counts as proof of this implementation or signing scheme.
 | V9 | Unauthenticated receiver state is bounded and expires | Total/per-interval/candidate/byte limits; expiry and capacity reuse tests |
 | V10 | Interrupted publication preserves the previous encrypted file | Injected replacement failure, temporary mode/cleanup, symlink test |
 | V11 | Branch cleanup cannot delete a changed head using stale approval | Fresh metadata decision tests; real bare-Git concurrent-update lease test |
+| V12 | Challenge-bound Ed25519 verification and pinned sender identity precede K[0] acceptance | Signature/tamper/nonce regressions; symbolic bootstrap negative controls |
+| V13 | Genuinely signed setup must be installed while K[1] is guaranteed secret | Establishment gate R+B<1+d; delayed setup attack regression; `bootstrap_stale_legacy` counterexample |
+| V14 | Signed receiver checks monotonic trusted interval for each admission/disclosure | Receiver clock refresh, invalid/rollback/forgery tests; 54-case timing grid; symbolic live-time model |
 
 ### Conditional source-authentication argument
 
@@ -79,6 +85,7 @@ python -m pip install --require-hashes -r requirements-ci.txt
 python -m pip install --no-deps --no-build-isolation -e .
 pytest
 python verification/check_invariants.py
+python verification/check_bootstrap.py
 python demo.py
 ```
 
@@ -118,6 +125,57 @@ show that useful behaviors are reachable. They are intentionally expected
 counterexamples, not unresolved failures of the intended positive configurations.
 Finite exploration does not establish unbounded safety or liveness; TLC uses
 fingerprints, with collision estimates in its output.
+
+## Signed setup timing proof obligation and new finite model
+
+Let S be the actual satellite interval, R the trusted receiver interval,
+B the independently justified maximum sender lead, i the claimed packet
+interval, and d the signed disclosure delay.
+
+Assume S <= R+B continuously, including at bootstrap and at each packet
+admission; uncompromised Ed25519 keys and correct pre-provisioned public
+identity key; fresh challenges; cryptographic resistance of SHA-256/HMAC;
+one new, not-previously-used satellite chain per signed bootstrap; and a
+monotonic, session-relative trusted receiver clock.
+
+At bootstrap, enforce R+B < 1+d. Since S <= R+B, this implies S < 1+d:
+K[1] is not public when receiver installs the signed K[0]. This rejects
+the specific valid-signature/late-delivery attack even though signature
+verification itself correctly succeeds.
+
+Later, admit packet i only if R+B < i+d. Then S < i+d at admission,
+so K[i] cannot be publicly disclosed yet. A forgery computed *from the
+disclosed key* cannot enter the trusted receiver buffer after disclosure.
+The receiver refreshes R before admission; restarting at R=1 after
+a delayed setup violates the premise. If B underestimates actual lead,
+or R is attacker-controlled or frozen, neither result follows.
+
+The independent finite module `BootstrapTime.tla` models both bootstrap
+and TESLA delayed-message admission. Pinned signatures/challenges are
+symbolic idealizations; it includes genuine and attacker-controlled
+setups, replay attempts, adversarial delivery delays, trustworthy
+clock/live receiver checks, key-release-driven forgeries, and honest
+message buffering/disclosure. CI runs two passing safety cases
+(synchronous delay 1 and lag 1/bound 1/delay 2) and five
+*expected* counterexamples/nonvacuity checks:
+
+| Model configuration | Expected result |
+| --- | --- |
+| bootstrap_sync_d1 | Safety holds; 23 distinct states |
+| bootstrap_lag_d2 | Safety holds; 52 distinct states |
+| bootstrap_stale_legacy | NoReleasedForgery violation, old delayed relay |
+| bootstrap_unsafe_bound | NoReleasedForgery violation with B < actual lag |
+| bootstrap_broken_signature | AuthenticatedAnchor violation |
+| bootstrap_broken_challenge | ChallengeFreshness violation |
+| bootstrap_honest_witness | NoHonestAuthentication deliberately fails, genuine acceptance is reachable |
+
+The new Python checker exhausts a **finite grid of 54 time-parameter
+combinations**, with 10 safe admissible and 44 rejected. Pytest covers
+real Ed25519 signatures, malformed values, late signed setups and the
+live post-disclosure HMAC attack; the previous tests, finite TESLA grids
+and original model run unchanged. These are **not** universal or
+computational proofs, no Python-to-TLA+ refinement has been established,
+and clock provisioning/synchronization remains out of scope.
 
 ## Abstraction boundaries and trusted computing base
 

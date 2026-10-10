@@ -187,10 +187,12 @@ for the adversarial argument, design boundaries, and an explanation from first p
 4. Each satellite chain is signed for **only one session, before any packet
    transmission or clock advancement**; a reused/partially disclosed chain
    cannot be signed for a new receiver challenge.
-5. The receiver checks the expected identity, exact challenge and signature
-   against its pinned key. Only after all checks pass does it construct
-   `Receiver` from the authenticated K[0] and session parameters. The challenge
-   is then consumed and cannot bootstrap a second receiver.
+5. The receiver verifies the identity, nonce and Ed25519 signature, then reads
+   a trusted, sender-session-relative interval R. With a separately justified
+   upper sender lead B, it requires R+B < 1+d before accepting K[0].
+6. The new receiver starts at R, re-reads its trusted clock before **every**
+   packet/disclosure, and refuses manual clock advancement or clock rollback.
+   The challenge is consumed after successful establishment.
 
 ```python
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -201,6 +203,9 @@ identity_key = Ed25519PrivateKey.generate()  # Demo only: real key is provisione
 bootstrap = ReceiverBootstrap(
     trusted_public_key=identity_key.public_key(),  # Trusted local pin, not an untrusted packet
     expected_satellite_id="satellite-alpha",
+    # Trusted same-process logical clock; replace with independently
+    # authenticated sender-session time in a real deployment.
+    trusted_interval_source=lambda: satellite.current_interval,
 )
 signed = sign_satellite_setup(
     satellite, signing_key=identity_key,
@@ -220,6 +225,34 @@ confidentiality, clock synchronization, trusted key provisioning, private-key
 hardware protection, or process isolation. Fresh challenge generation assumes
 secure randomness and unused challenges; persistent session restore remains
 out of scope.
+
+### Repair: genuine signed setup delivered too late
+
+A genuine signature can be intercepted and delivered after the satellite has
+already released K[1]. Previously the new receiver restarted at interval 1,
+which could permit an attacker with known K[1] to forge old-interval HMACs.
+The signed setup now **requires** `trusted_interval_source: Callable[[], int]`,
+a host-provided monotonic interval clock in the authenticated satellite session;
+there is no default unsigned or unverified time fallback.
+The verifier applies `R + max_sender_ahead < 1 + disclosure_delay` *before*
+building the receiver. The receiver continues to consult the clock on each
+packet admission and key disclosure. This does not itself establish trusted
+time, network synchronization, or a clock-skew bound: those are security
+preconditions that deployment must satisfy independently of attacker traffic.
+
+The demo uses `satellite.current_interval` as the trusted interval source
+because both objects run in one trusted process. That approach is **only
+for the simulator**. The bare `Receiver(commitment=...)` constructor still
+exists for already trusted setup and host-managed time; it is not an
+unauthenticated network setup endpoint.
+
+The security regression suite includes stale genuinely signed setup, clock
+rollback, invalid clock values, live post-disclosure HMAC forgery, and a 54-case
+time-bound input grid. A second finite TLA+ module,
+`verification/model/BootstrapTime.tla`, composes idealized bootstrap and
+TESLA timing; its negative controls expose old stale-clock, wrong-skew,
+unsigned-anchor and skipped-challenge failures. Both old and new TLA+ suites
+run in CI. See `VERIFICATION.md` and `verification/model/README.md`.
 
 ## Implementation summary
 
@@ -263,7 +296,9 @@ This table is also the quickest review path: each requirement maps directly to a
 - tests/test_protocol.py — automated positive, negative, timing, tampering, replay, persistence, and ordering tests
 - SECURITY.md — threat model, trust assumptions, timing rule, persistence design, and scope limits
 - VERIFICATION.md — security invariants, proof obligations, trusted computing base, and verification evidence
-- verification/check_invariants.py — finite timing-input grids and fixed adversarial replay/forgery traces
+- verification/check_invariants.py — finite TESLA grids and replay/forgery traces
+- verification/check_bootstrap.py — signed-bootstrap 54-case trusted-time grid
+- verification/model/BootstrapTime.tla — finite combined bootstrap and TESLA time model
 - .github/workflows/tests.yml — CI test matrix for Python 3.11, 3.12, and 3.13
 
 ## Key-chain model

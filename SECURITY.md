@@ -50,6 +50,39 @@ after message transmission/clock advancement. Otherwise a genuinely signed
 *old* chain with previously disclosed keys could be abused in a new receiver
 session. This guard assumes trusted process state; no crash-resume protocol exists.
 
+## Delayed genuine signed setup and live trusted time
+
+**Threat reproduced:** an attacker withholds an authentic satellite setup
+until the first TESLA interval key has already become public, then replays
+that genuinely signed response. The old verifier checked signature/nonce,
+then unconditionally started the receiver at interval 1. A valid MAC
+computed using the now-public interval key could be admitted. Ed25519
+remained uncompromised.
+
+**Repair:** the signed bootstrap now takes a mandatory
+`trusted_interval_source` callback from trusted local configuration.
+It returns the current *sender-session-relative* receiver interval R,
+and the host must independently justify a bound S <= R+B, where S is
+actual satellite interval and B is `max_sender_ahead`. After signature and
+challenge checks, setup is **rejected** unless R+B < 1+d, where d is signed
+disclosure delay. The first interval key is therefore still undisclosed
+at setup, conditional on the bound. A successful receiver initializes at R,
+re-reads trusted R for packet admission and disclosure, rejects invalid
+or backward clock samples, and forbids manual `advance()`.
+
+The check before **each** packet still enforces R+B < i+d. The old
+`Receiver(...)` API remains for the original trusted-injection simulation;
+untrusted applications must not call it with network-supplied K[0].
+
+**Critical deployment assumption:** a Python callback is not itself
+hardware-backed trusted time or synchronization. It must be backed by an
+independently verified satellite-session epoch, interval duration,
+monotonic local clock, and conservative bound on sender lead. Do not
+derive it from attacker-supplied network timestamps. If the clock stops
+while the satellite advances, the S<=R+B assumption can fail and safety
+is not guaranteed. No network clock synchronization, remote attestation,
+PKI, hardware HSM, safe restart, or availability guarantee is supplied.
+
 ## Time is a security precondition
 
 The sender's logical clock and the receiver's logical clock must be advanced by

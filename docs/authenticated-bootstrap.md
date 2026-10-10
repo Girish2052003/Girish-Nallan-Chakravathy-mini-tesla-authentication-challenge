@@ -120,5 +120,36 @@ Run `python demo.py`, `pytest`, and
 `python verification/check_invariants.py`. Audit signing and verification in
 `src/mini_tesla/setup.py`, negative tests in `tests/test_setup.py`, and
 the separate TESLA state machine in `src/mini_tesla/protocol.py`.
-The original TLA+ model assumes trusted K[0] and has not been extended to model
-this Ed25519 bootstrap; it is not a machine-checked proof of the signature layer.
+The original TLA+ model still assumes trusted K[0]. A **separate**
+`BootstrapTime.tla` finite model now composes symbolic authenticated
+bootstrap with later delayed-key message admission; this is not a
+machine-checked proof of Ed25519 or Python.
+
+## New protection: a real signature can still be delivered too late
+
+The satellite signs its setup at interval 1, then eventually discloses
+K[1] at interval 1+d. An attacker can withhold the genuine signature
+and deliver it after disclosure. The old receiver verified the signature
+and restarted logical time at 1, potentially admitting a forgery
+calculated from known K[1].
+
+The repaired bootstrap **requires an external trusted interval source**
+that gives receiver time R aligned with this satellite session, and an
+independently justified maximum sender lead B (S <= R+B).
+It now requires R+B < 1+d *after* verifying the genuine signature
+and *before* installing K[0]. The receiver is initialized at R and
+refreshes that clock before every packet and disclosure; it refuses
+manual advancement and fails closed on clock rollback.
+
+This is a **conditional** fix: authentic time origin and clock-skew
+bounding must come from a separate trusted provisioning/synchronization
+procedure. Merely passing a user-controlled or frozen clock callback
+does not guarantee safety. For the single-process demonstration,
+`trusted_interval_source=lambda: satellite.current_interval` is
+a valid shared logical clock simulation, not a network implementation.
+
+The new symbolic TLA+ suite reproduces the original delayed setup
+forgery as an expected counterexample while its properly bounded
+live-clock cases satisfy the checked invariants. It also checks negative
+signature/nonce controls and witnesses a genuine accepted message.
+
