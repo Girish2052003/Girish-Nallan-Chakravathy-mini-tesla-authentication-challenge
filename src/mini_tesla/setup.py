@@ -100,6 +100,12 @@ def sign_satellite_setup(
     if not isinstance(signing_key, Ed25519PrivateKey):
         raise TypeError("signing_key must be an Ed25519 private key")
 
+    # Do not sign a reused or partially disclosed chain for a different
+    # receiver challenge. Old disclosed interval keys would otherwise
+    # allow authenticated-looking forgeries in a restarted receiver.
+    if satellite._bootstrap_signed or satellite.current_interval != 1 or satellite._next_sequence != 1:
+        raise SetupRejected("signed setup requires a fresh, unused satellite chain")
+
     unsigned = SignedSetup(
         satellite_id=satellite_id,
         challenge=challenge,
@@ -108,7 +114,9 @@ def sign_satellite_setup(
         disclosure_delay=satellite.disclosure_delay,
         signature=b"",
     )
-    return replace(unsigned, signature=signing_key.sign(unsigned.signed_bytes()))
+    signed = replace(unsigned, signature=signing_key.sign(unsigned.signed_bytes()))
+    satellite._bootstrap_signed = True
+    return signed
 
 
 class ReceiverBootstrap:

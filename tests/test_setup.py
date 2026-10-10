@@ -185,3 +185,49 @@ def test_receiver_policy_is_locally_validated_without_consuming_challenge(setup_
     with pytest.raises(ValueError):
         bootstrap.establish(signed, max_buffered_packets=0)
     assert bootstrap.establish(signed).hsm.commitment == signed.commitment
+
+
+def test_sender_cannot_sign_same_chain_for_two_new_receivers(setup_pair):
+    satellite, key, _, _ = setup_pair
+    another_receiver = ReceiverBootstrap(
+        trusted_public_key=key.public_key(),
+        expected_satellite_id="satellite-alpha",
+    )
+    with pytest.raises(SetupRejected, match="fresh, unused"):
+        sign_satellite_setup(
+            satellite, signing_key=key, satellite_id="satellite-alpha",
+            challenge=another_receiver.challenge,
+        )
+
+
+def test_sender_cannot_sign_chain_after_messages_or_time_progress():
+    key = Ed25519PrivateKey.generate()
+    used = Satellite(chain_length=4, disclosure_delay=1)
+    used.authenticate(b"already used")
+    with pytest.raises(SetupRejected, match="fresh, unused"):
+        sign_satellite_setup(
+            used, signing_key=key, satellite_id="satellite-alpha",
+            challenge=secrets.token_bytes(32),
+        )
+    advanced = Satellite(chain_length=4, disclosure_delay=1)
+    advanced.advance()
+    with pytest.raises(SetupRejected, match="fresh, unused"):
+        sign_satellite_setup(
+            advanced, signing_key=key, satellite_id="satellite-alpha",
+            challenge=secrets.token_bytes(32),
+        )
+
+
+def test_rejected_setup_does_not_burn_unused_satellite_chain():
+    key = Ed25519PrivateKey.generate()
+    satellite = Satellite(chain_length=4, disclosure_delay=1)
+    with pytest.raises(SetupRejected):
+        sign_satellite_setup(
+            satellite, signing_key=key, satellite_id="satellite-alpha",
+            challenge=b"bad",
+        )
+    signed = sign_satellite_setup(
+        satellite, signing_key=key, satellite_id="satellite-alpha",
+        challenge=secrets.token_bytes(32),
+    )
+    assert len(signed.signature) == 64

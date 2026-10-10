@@ -184,7 +184,10 @@ for the adversarial argument, design boundaries, and an explanation from first p
    satellite identity, receiver challenge, K[0], chain length, disclosure delay,
    and setup version. The signature is generated with the sender's separate
    Ed25519 identity **private** key.
-4. The receiver checks the expected identity, exact challenge and signature
+4. Each satellite chain is signed for **only one session, before any packet
+   transmission or clock advancement**; a reused/partially disclosed chain
+   cannot be signed for a new receiver challenge.
+5. The receiver checks the expected identity, exact challenge and signature
    against its pinned key. Only after all checks pass does it construct
    `Receiver` from the authenticated K[0] and session parameters. The challenge
    is then consumed and cannot bootstrap a second receiver.
@@ -223,7 +226,8 @@ out of scope.
 The solution uses:
 
 - Python 3.11+
-- Ed25519 for signed, challenge-bound commitment bootstrap (recommended receiver setup)\n- SHA-256 for the one-way key chain
+- Ed25519 for signed, challenge-bound commitment bootstrap (recommended receiver setup)
+- SHA-256 for the one-way key chain
 - HMAC-SHA256 for message authentication
 - AES-256-GCM for encrypted HSM state export/import
 - the Python cryptography package for HMAC and AES-GCM
