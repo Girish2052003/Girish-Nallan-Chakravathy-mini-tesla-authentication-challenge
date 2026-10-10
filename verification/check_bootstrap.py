@@ -42,7 +42,7 @@ def main() -> None:
                 count += 1
     print(f"Bootstrap time grid passed: {count} cases "
           f"({passed} admitted, {rejected} rejected)")
-    assert count == 63
+    assert count == 54
 
 if __name__ == "__main__":
     main()

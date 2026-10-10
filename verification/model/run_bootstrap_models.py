@@ -32,7 +32,7 @@ def main():
         run = subprocess.run(cmd, cwd=BASE, capture_output=True, text=True, timeout=60)
         out = run.stdout + run.stderr
         (directory / (name + ".log")).write_text(out)
-        errors = re.findall(r"Error: Invariant (\\w+) is violated\\.", out)
+        errors = re.findall(r"Error: Invariant (\w+) is violated\.", out)
         if (run.returncode != (12 if expected else 0)
             or errors != ([expected] if expected else [])
             or (expected is None and "No error has been found" not in out)):
