@@ -101,6 +101,8 @@ class Satellite(_Clock):
         self._disclosure_delay = disclosure_delay
         self._current_interval = 1
         self._next_sequence = 1
+        # A key chain must only be signed for one authenticated session.
+        self._bootstrap_signed = False
 
     @property
     def commitment(self) -> bytes:

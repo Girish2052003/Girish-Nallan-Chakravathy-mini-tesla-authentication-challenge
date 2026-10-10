@@ -170,11 +170,63 @@ For the reproducible **hash-locked dependency installation used by CI**, see [Au
 ---
 
 
+## Authenticated commitment bootstrap (Ed25519)
+
+**New hardening beyond the core challenge:** The recommended setup path authenticates
+K[0] *before* constructing a receiver. See [docs/authenticated-bootstrap.md](docs/authenticated-bootstrap.md)
+for the adversarial argument, design boundaries, and an explanation from first principles.
+
+1. The receiver starts with the satellite's Ed25519 **public identity key securely
+   pinned in trusted configuration**. Never accept a public key accompanying an
+   untrusted setup as a new trust anchor.
+2. `ReceiverBootstrap` creates a new, 32-byte CSPRNG challenge.
+3. The satellite signs a canonical, domain-separated structure containing the
+   satellite identity, receiver challenge, K[0], chain length, disclosure delay,
+   and setup version. The signature is generated with the sender's separate
+   Ed25519 identity **private** key.
+4. Each satellite chain is signed for **only one session, before any packet
+   transmission or clock advancement**; a reused/partially disclosed chain
+   cannot be signed for a new receiver challenge.
+5. The receiver checks the expected identity, exact challenge and signature
+   against its pinned key. Only after all checks pass does it construct
+   `Receiver` from the authenticated K[0] and session parameters. The challenge
+   is then consumed and cannot bootstrap a second receiver.
+
+```python
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from mini_tesla import ReceiverBootstrap, Satellite, sign_satellite_setup
+
+satellite = Satellite(chain_length=6, disclosure_delay=1)
+identity_key = Ed25519PrivateKey.generate()  # Demo only: real key is provisioned securely
+bootstrap = ReceiverBootstrap(
+    trusted_public_key=identity_key.public_key(),  # Trusted local pin, not an untrusted packet
+    expected_satellite_id="satellite-alpha",
+)
+signed = sign_satellite_setup(
+    satellite, signing_key=identity_key,
+    satellite_id="satellite-alpha", challenge=bootstrap.challenge,
+)
+receiver = bootstrap.establish(signed)
+```
+
+`Receiver(commitment=..., ...)` remains available for tests and *explicitly
+trusted, direct-injection* use cases required by the original challenge. It
+performs **no signature verification** and MUST NOT be fed network-provided
+commitments directly. The `demo.py` path now uses the signed bootstrap and
+shows both a forged-commitment rejection and a setup replay rejection.
+
+This layer authenticates **who owns the commitment**, not message
+confidentiality, clock synchronization, trusted key provisioning, private-key
+hardware protection, or process isolation. Fresh challenge generation assumes
+secure randomness and unused challenges; persistent session restore remains
+out of scope.
+
 ## Implementation summary
 
 The solution uses:
 
 - Python 3.11+
+- Ed25519 for signed, challenge-bound commitment bootstrap (recommended receiver setup)
 - SHA-256 for the one-way key chain
 - HMAC-SHA256 for message authentication
 - AES-256-GCM for encrypted HSM state export/import
@@ -206,7 +258,7 @@ This table is also the quickest review path: each requirement maps directly to a
 ## Project layout
 
 - src/mini_tesla/hsm.py — key-chain generation, HMAC operations, delayed key disclosure, disclosed-key validation, AES-256-GCM persistence
-- src/mini_tesla/protocol.py — deterministic packet encoding, Satellite and Receiver state machines, buffering, disclosure timing checks, replay protection
+- src/mini_tesla/setup.py — pinned-key Ed25519 signature verification, fresh-challenge bootstrap\n- tests/test_setup.py — signed bootstrap and commitment-substitution/replay regressions\n- docs/authenticated-bootstrap.md — threat model and signature learning guide\n- src/mini_tesla/protocol.py — deterministic packet encoding, Satellite and Receiver state machines, buffering, disclosure timing checks, replay protection
 - demo.py — required end-to-end demonstration
 - tests/test_protocol.py — automated positive, negative, timing, tampering, replay, persistence, and ordering tests
 - SECURITY.md — threat model, trust assumptions, timing rule, persistence design, and scope limits

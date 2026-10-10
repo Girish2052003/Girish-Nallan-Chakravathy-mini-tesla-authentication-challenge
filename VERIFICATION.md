@@ -5,6 +5,32 @@ safety argument under stated assumptions, and an independent finite TLA+ model.
 There is **no machine-checked proof of the Python implementation**, no refinement
 proof from Python to TLA+, and no proof of the cryptographic primitives.
 
+## Signed-bootstrap assurance boundary
+
+The new `setup.py` implementation adds an Ed25519 signature over a
+domain-separated, canonical encoding of setup version, satellite identity,
+fresh receiver challenge, K[0], chain length, and disclosure delay.
+`ReceiverBootstrap.establish` checks pinned identity/public key, challenge,
+field validity, and signature **before** constructing a receiver. Upon success
+the receiver challenge is single-use. `tests/test_setup.py` covers a genuine
+setup, substituted chain with attacker-owned signing key, tampered signed
+metadata, malformed fields, stale signed bootstrap replay, wrong pinned public
+key, same-challenge reuse, and a real delayed-authentication exchange.
+
+**Conditional argument:** An accepted challenge-bound setup for pinned identity
+must have a valid Ed25519 signature on the exact setup bytes. An adversary
+without its signing private key cannot produce that signature for a substituted
+commitment or fresh challenge, assuming Ed25519 existential unforgeability,
+authentic initial public-key pinning, unpredictable challenge generation, and
+trusted host execution. Replay of an old response fails because the new challenge
+differs, absent an astronomically unlikely nonce collision. This reasoning does
+not prove Ed25519, the Python code, or universal deployment security.
+
+The independent TLA+ model still checks **TESLA protocol safety only**, not the
+new signed-bootstrap layer. Its trusted K[0] assumption is now supplied by
+the *conditional* authenticated-setup argument. Do not interpret prior
+finite-model counts as proof of this implementation or signing scheme.
+
 ## Invariants and implementation evidence
 
 | ID | Property | Evidence |
