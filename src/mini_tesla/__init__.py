@@ -18,6 +18,8 @@ from .protocol import (
     VerificationResult,
 )
 
+from .setup import ReceiverBootstrap, SetupRejected, SignedSetup, sign_satellite_setup
+
 __all__ = [
     "AuthPacket",
     "DisclosureRejected",
@@ -28,8 +30,12 @@ __all__ = [
     "PacketRejected",
     "PersistenceError",
     "Receiver",
+    "ReceiverBootstrap",
     "ReplayDetected",
     "Satellite",
+    "SetupRejected",
+    "SignedSetup",
     "VerificationResult",
     "master_key_from_env",
+    "sign_satellite_setup",
 ]

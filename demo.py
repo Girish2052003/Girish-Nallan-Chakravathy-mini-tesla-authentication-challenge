@@ -5,7 +5,12 @@ from __future__ import annotations
 import secrets
 from dataclasses import replace
 
-from mini_tesla import DisclosureRejected, Receiver, ReplayDetected, Satellite
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from mini_tesla import (
+    DisclosureRejected, ReceiverBootstrap, ReplayDetected, Satellite,
+    SetupRejected, sign_satellite_setup,
+)
 
 
 def print_results(label: str, results) -> None:
@@ -16,13 +21,38 @@ def print_results(label: str, results) -> None:
 
 def main() -> None:
     satellite = Satellite(chain_length=6, disclosure_delay=1)
-    receiver = Receiver(
-        commitment=satellite.commitment,
-        chain_length=satellite.chain_length,
-        disclosure_delay=satellite.disclosure_delay,
+    # Trusted provisioning: in this single-process demo, the sender's public
+    # identity key is pinned directly. A real deployment must provision it
+    # independently (e.g. from a trusted configuration or authenticated PKI).
+    signing_key = Ed25519PrivateKey.generate()
+    bootstrap = ReceiverBootstrap(
+        trusted_public_key=signing_key.public_key(),
+        expected_satellite_id="satellite-alpha",
     )
 
-    print("Trusted commitment:", satellite.commitment.hex())
+    # An attacker can create an entirely valid alternative TESLA key chain,
+    # but cannot authenticate its fake commitment under the pinned public key.
+    attacker = Satellite(chain_length=6, disclosure_delay=1)
+    attacker_setup = sign_satellite_setup(
+        attacker, signing_key=Ed25519PrivateKey.generate(),
+        satellite_id="satellite-alpha", challenge=bootstrap.challenge,
+    )
+    try:
+        bootstrap.establish(attacker_setup)
+    except SetupRejected as exc:
+        print("[fake satellite setup] REJECT:", exc)
+
+    signed_setup = sign_satellite_setup(
+        satellite, signing_key=signing_key, satellite_id="satellite-alpha",
+        challenge=bootstrap.challenge,
+    )
+    receiver = bootstrap.establish(signed_setup)
+    print("[signed bootstrap] ACCEPT: identity and fresh signed commitment verified")
+    try:
+        bootstrap.establish(signed_setup)
+    except SetupRejected as exc:
+        print("[setup replay] REJECT:", exc)
+    print("Authenticated commitment:", receiver.hsm.commitment.hex())
 
     valid = satellite.authenticate(b"orbit=nominal;clock=12345")
     original_for_tamper = satellite.authenticate(b"command=hold-attitude")

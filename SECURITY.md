@@ -14,6 +14,38 @@ runtime, and the cryptography package are assumptions. The attacker cannot read
 or modify process memory, the master-key environment, or private Python fields.
 Python private attributes model an HSM boundary; they do not enforce isolation.
 
+## Authenticating the initial commitment
+
+A malicious network may replace an *unsigned* TESLA K[0] with a commitment
+from its own key chain and produce apparently valid delayed MACs. Matching a
+disclosed key to K[0] proves membership in that chain, not the sender identity.
+
+The recommended network-facing bootstrap is `ReceiverBootstrap` in `setup.py`.
+The receiver must already trust the authentic Ed25519 sender identity public
+key (and expected satellite_id), provisioned independently of attacker traffic.
+It generates a random 256-bit challenge and authenticates the sender-signed
+tuple: domain/version, satellite ID, challenge, K[0], chain length, and
+disclosure delay. The challenge must match exactly and can be used once. Setup
+signature verification uses the pinned public key, never a key sent by the
+untrusted network peer. A failed verification does not install the commitment.
+
+Under the assumptions of unforgeable Ed25519 signatures, uncompromised
+identity private key, authentic public-key pinning, fresh challenges, and
+unmodified host state, an attacker cannot substitute its own K[0] without
+being rejected. This does not give confidentiality, prevent relaying of an
+honest peer, authenticate the receiver to the satellite, implement PKI/certificate
+revocation, persist receiver challenges, or solve time synchronization. The
+demo generates an ephemeral identity key and passes its public key as *trusted
+local configuration* to illustrate pinning; deployment must provision stable
+identity keys out-of-band. A restart should use a fresh bootstrap and a fresh
+TESLA key chain, not resume an existing TESLA session from HSM persistence.
+
+The legacy `Receiver(commitment=...)` API is deliberately retained for
+tests and explicit local trusted injection. It does **not** authenticate K[0];
+never pass an unauthenticated network commitment to that constructor. An
+attacker with Python process-memory access can bypass software boundaries.
+The Ed25519 signing private key is not stored in HSM persistence.
+
 ## Time is a security precondition
 
 The sender's logical clock and the receiver's logical clock must be advanced by
