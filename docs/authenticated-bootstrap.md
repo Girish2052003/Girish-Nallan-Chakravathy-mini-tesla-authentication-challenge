@@ -35,8 +35,10 @@ attacker replacing the pinned value destroys sender authentication.
 3. Satellite generates its TESLA key chain and commitment K[0]. It constructs
    the setup bytes shown below, containing N, satellite ID, K[0], chain length,
    disclosure delay, and version.
-4. Satellite computes signature = Ed25519.Sign(identity_private, setup_bytes).
-   It returns the public setup fields plus the 64-byte signature.
+4. Satellite confirms that this is a fresh, unused chain, signs it exactly
+   once with Ed25519.Sign(identity_private, setup_bytes), and returns the public
+   setup fields plus the 64-byte signature. A partially disclosed or reused
+   chain MUST NOT be signed for another receiver.
 5. Receiver strictly encodes the received fields, checks identity and equality
    with its still-pending N, then checks
    Ed25519.Verify(pinned_public, setup_bytes, signature). On **any** failure,

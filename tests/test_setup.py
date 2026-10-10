@@ -86,7 +86,8 @@ def test_old_signed_setup_does_not_satisfy_new_receiver_challenge(setup_pair):
 
 
 def test_valid_signature_under_untrusted_identity_key_is_rejected(setup_pair):
-    satellite, real_key, _, _ = setup_pair
+    _, real_key, _, _ = setup_pair
+    satellite = Satellite(chain_length=5, disclosure_delay=2)
     wrong_identity = ReceiverBootstrap(
         trusted_public_key=Ed25519PrivateKey.generate().public_key(),
         expected_satellite_id="satellite-alpha",

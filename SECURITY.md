@@ -45,6 +45,10 @@ tests and explicit local trusted injection. It does **not** authenticate K[0];
 never pass an unauthenticated network commitment to that constructor. An
 attacker with Python process-memory access can bypass software boundaries.
 The Ed25519 signing private key is not stored in HSM persistence.
+The signer also forbids signing the same satellite chain twice, or signing it
+after message transmission/clock advancement. Otherwise a genuinely signed
+*old* chain with previously disclosed keys could be abused in a new receiver
+session. This guard assumes trusted process state; no crash-resume protocol exists.
 
 ## Time is a security precondition
 
