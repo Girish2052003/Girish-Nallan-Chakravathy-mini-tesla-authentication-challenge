@@ -1,2 +1,6 @@
+# pip reads this list when asked to install the ordinary development dependencies.
+# >= means "at least"; < means "strictly below". These are allowed version ranges.
+# cryptography provides encryption and digital signatures used by the HSM/setup.
 cryptography>=43,<47
+# pytest runs the automated checks in tests/. The CI lock file pins exact versions.
 pytest>=8,<10

@@ -1,29 +1,51 @@
+# This YAML file starts the guarded branch-cleanup script after a merge.
+# Indentation groups settings; this name appears in the GitHub Actions page.
 name: cleanup merged branch
 
+# Listen only for pull requests (proposed changes) whose destination is main.
 on:
   pull_request:
+    # "closed" can mean merged or rejected; the job condition checks which below.
     types: [closed]
+    # This filters the destination branch, not the branch proposed for deletion.
     branches: [main]
 
+# Default to reading repository contents. The cleanup job adds its needed rights.
 permissions:
   contents: read
 
+# Define one group of operations named cleanup.
 jobs:
   cleanup:
+    # >- joins the following lines into one condition. && means "and".
+    # Require an actual merge, a source branch in this repository (not a fork),
+    # and this repository owner. A copied workflow in another account stays idle.
     if: >-
       github.event.pull_request.merged == true &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.repository_owner == 'Girish2052003'
+    # Run the operations on a fresh GitHub-hosted Ubuntu machine.
     runs-on: ubuntu-latest
+    # Git branch deletion requires contents: write; checking PR evidence requires
+    # pull-requests: read. The script independently validates the deletion target.
     permissions:
       contents: write
       pull-requests: read
+    # Run these steps in order.
     steps:
+      # Use a fixed commit of the checkout action, not a movable version tag.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          # Execute the cleanup script from trusted main, not the PR's branch.
           ref: main
+          # Fetch complete history so the script can check merge ancestry.
+          # Checkout's default saved credentials let its Git push use the job token.
           fetch-depth: 0
+      # The script rechecks the branch's exact commit and deletes with a Git lease:
+      # a server-side "only if still at this commit" condition protecting new work.
       - name: Delete only this PR's unchanged merged head
+        # Supply the job's token privately through the process environment.
         env:
           GITHUB_TOKEN: ${{ github.token }}
+        # Start the Python maintenance script. It logs its decision, not the token.
         run: python3 scripts/cleanup_merged_branch.py
