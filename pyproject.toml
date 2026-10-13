@@ -1,24 +1,47 @@
+# This file tells installation and testing tools how this Python project works.
+# [section] starts a group of settings; name = value assigns one setting.
+# It configures tools rather than sending or authenticating any messages.
+
+# Choose the tool that builds installable copies of the package.
 [build-system]
+# Building requires setuptools version 75 or newer.
 requires = ["setuptools>=75"]
+# Use setuptools' standard Python build interface.
 build-backend = "setuptools.build_meta"
 
+# Describe the package that pip will install.
 [project]
+# This is its installation name; Python imports still use mini_tesla.
 name = "mini-tesla-authentication-challenge"
+# This is the package release label, not the packet format version.
 version = "0.1.0"
+# Show a short explanation in package information.
 description = "HSM-backed Mini-TESLA delayed-disclosure message authentication challenge"
+# Reject installation on Python versions older than 3.11.
 requires-python = ">=3.11"
+# List libraries needed while running the program. Square brackets hold a list.
 dependencies = [
+    # Use cryptography for established encryption and signature implementations.
+    # >=43,<47 allows versions from 43 up to, but excluding, 47.
     "cryptography>=43,<47",
 ]
 
+# Optional extras are installed only when requested, such as pip install '.[dev]'.
 [project.optional-dependencies]
+# The development extra supplies the tool that runs our automated tests.
 dev = [
+    # Allow pytest versions 8 and 9; CI separately pins an exact tested version.
     "pytest>=8,<10",
 ]
 
+# Give pytest its default settings for this repository.
 [tool.pytest.ini_options]
+# -q makes ordinary test output shorter while still showing failures.
 addopts = "-q"
+# Find tests inside the tests directory when no path is supplied.
 testpaths = ["tests"]
 
+# Tell setuptools where the importable package directories live.
 [tool.setuptools.packages.find]
+# Look under src rather than packaging tests and maintenance scripts by accident.
 where = ["src"]

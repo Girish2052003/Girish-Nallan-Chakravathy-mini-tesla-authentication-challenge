@@ -1,4 +1,10 @@
 # Exact versions exercised by the independent audit; compile to a hash-locked file.
+# This is input for the lock-file generator, not Python code. == means exactly
+# this version. The generated requirements-ci.txt also lists dependencies of these
+# libraries and approved download hashes (checks of the downloaded file bytes).
+# Encryption and signature library used by the implementation.
 cryptography==46.0.7
+# Automated test runner used in continuous integration (CI: checks on GitHub).
 pytest==9.1.1
+# Package builder needed to install this project without isolated build downloads.
 setuptools==84.0.0
